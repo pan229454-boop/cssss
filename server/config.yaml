@@ -1,0 +1,27 @@
+# NAT Tunnel 服务端配置
+
+# 控制端口 - 客户端连接用
+control_port: 7000
+
+# 认证token - 客户端需要使用相同的token才能连接
+# !! 请务必修改为自己的安全密钥 !!
+auth_token: "change_me_to_a_secure_token"
+
+# Web管理面板端口
+web_port: 7500
+
+# Web管理面板密码
+# !! 请务必修改为自己的安全密码 !!
+web_password: "admin123"
+
+# 允许映射的端口范围 [最小, 最大]
+allowed_ports: [10000, 60000]
+
+# 每个客户端最大隧道数
+max_tunnels_per_client: 10
+
+# 心跳间隔(秒)
+heartbeat_interval: 30
+
+# 心跳超时(秒) - 超过此时间没有心跳将断开连接
+heartbeat_timeout: 90

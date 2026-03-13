@@ -1,0 +1,17 @@
+[Unit]
+Description=NAT Tunnel Server - 内网穿透服务
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/www/server/nat-tunnel/server
+ExecStart=/usr/bin/python3 /www/server/nat-tunnel/server/server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/www/server/nat-tunnel/logs/server.log
+StandardError=append:/www/server/nat-tunnel/logs/error.log
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

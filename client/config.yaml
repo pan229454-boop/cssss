@@ -1,0 +1,39 @@
+# NAT Tunnel 客户端配置
+
+# 服务器地址 - 填写你的公网服务器IP或域名
+server_addr: "your_server_ip"
+
+# 服务器控制端口
+server_port: 7000
+
+# 客户端名称 - 用于在服务端识别此设备
+client_name: "my-device"
+
+# 认证token - 必须与服务端配置一致
+auth_token: "change_me_to_a_secure_token"
+
+# 心跳间隔(秒)
+heartbeat_interval: 30
+
+# 断线重连间隔(秒)
+retry_interval: 5
+
+# 最大重连次数 (0 = 无限重连)
+max_retries: 0
+
+# 隧道列表 - 定义需要映射的端口
+tunnels:
+  # 示例1: 将内网的SSH端口映射到公网
+  - remote_port: 10022    # 公网服务器上开放的端口
+    local_addr: "127.0.0.1"  # 内网地址
+    local_port: 22           # 内网端口
+
+  # 示例2: 将内网Web服务映射到公网
+  - remote_port: 18080
+    local_addr: "127.0.0.1"
+    local_port: 8080
+
+  # 示例3: 映射内网其他设备的服务
+  # - remote_port: 13389
+  #   local_addr: "192.168.1.100"
+  #   local_port: 3389

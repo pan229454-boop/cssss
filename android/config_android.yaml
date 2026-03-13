@@ -1,0 +1,31 @@
+# NAT Tunnel Android 客户端配置
+# Termux 环境默认端口
+
+# 服务器地址 - 填写你的公网服务器IP或域名
+server_addr: "你的服务器IP"
+server_port: 7000
+
+# 客户端名称
+client_name: "my-android"
+
+# 认证密钥（必须与服务端一致）
+auth_token: "change_me_to_a_secure_token"
+
+# 心跳设置
+heartbeat_interval: 30
+
+# 断线重连
+retry_interval: 5
+max_retries: 0
+
+# 隧道列表
+tunnels:
+  # Termux SSH端口（需先运行 sshd）
+  - remote_port: 10022
+    local_addr: "127.0.0.1"
+    local_port: 8022
+
+  # Termux Web服务（如果有的话）
+  # - remote_port: 18080
+  #   local_addr: "127.0.0.1"
+  #   local_port: 8080
