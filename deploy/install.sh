@@ -20,9 +20,8 @@ SERVICE_NAME="nat-tunnel"
 
 echo ""
 echo "[1/5] 安装Python依赖..."
-pip3 install pyyaml || {
-    echo "pip3安装失败，尝试使用pip..."
-    pip install pyyaml
+pip3 install --quiet pyyaml 2>/dev/null || pip install --quiet pyyaml 2>/dev/null || {
+    echo "  => pyyaml安装失败，请手动执行: pip3 install pyyaml"
 }
 
 echo ""
