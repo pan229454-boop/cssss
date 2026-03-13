@@ -12,12 +12,22 @@ import hmac
 import os
 import ssl
 import time
-import secrets
 import struct
-import yaml
 import signal
 from collections import defaultdict
 from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+try:
+    from secrets import token_hex
+except ImportError:
+    import binascii
+    def token_hex(n=32):
+        return binascii.hexlify(os.urandom(n)).decode()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,9 +57,15 @@ MAX_BODY_SIZE = 1024 * 1024  # 1MB
 
 def load_config():
     config_path = Path(__file__).parent / 'config.yaml'
-    if config_path.exists():
+    if config_path.exists() and yaml:
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
+    elif config_path.exists():
+        # 无yaml模块时用json备选
+        json_path = Path(__file__).parent / 'config.json'
+        if json_path.exists():
+            with open(json_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
     return {
         'control_port': 7000,
         'auth_token': 'change_me_to_a_secure_token',
@@ -160,13 +176,18 @@ class NATTunnelServer:
             '0.0.0.0',
             control_port
         )
-        logger.info(f'NAT隧道服务器启动在端口 {control_port}')
+        logger.info('NAT隧道服务器启动在端口 {}'.format(control_port))
 
         # 启动心跳检测
-        asyncio.create_task(self._heartbeat_checker())
+        asyncio.ensure_future(self._heartbeat_checker())
 
-        async with server:
-            await server.serve_forever()
+        # 兼容Python 3.6（无serve_forever）
+        try:
+            while self._running:
+                await asyncio.sleep(1)
+        finally:
+            server.close()
+            await server.wait_closed()
 
     async def _heartbeat_checker(self):
         """检查客户端心跳"""
@@ -376,7 +397,7 @@ class NATTunnelServer:
         try:
             await client_session.send(MSG_DATA, self._pack_data_header(conn_id, b'__NEW_CONN__' + new_conn_info))
             # 开始从访问者读数据并转发给客户端
-            asyncio.create_task(
+            asyncio.ensure_future(
                 self._relay_visitor_to_client(visitor_reader, client_session, conn_id, tunnel)
             )
         except Exception as e:
@@ -541,14 +562,13 @@ class NATTunnelServer:
                 'tunnel_count': len(session.tunnels),
                 'tunnels': tunnels,
             }
+        stats = dict(self._stats)
+        stats['uptime'] = time.time() - self._stats['start_time']
+        stats['active_clients'] = len(self.clients)
+        stats['active_tunnels'] = len(self.tunnels)
         return {
             'clients': clients_info,
-            'stats': {
-                **self._stats,
-                'uptime': time.time() - self._stats['start_time'],
-                'active_clients': len(self.clients),
-                'active_tunnels': len(self.tunnels),
-            }
+            'stats': stats,
         }
 
 
@@ -559,13 +579,16 @@ async def main():
     # 启动Web管理面板
     from web_admin import WebAdmin
     web = WebAdmin(server, config)
-    web_task = asyncio.create_task(web.start())
+    asyncio.ensure_future(web.start())
 
     await server.start()
 
 
 if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
     try:
-        asyncio.run(main())
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
         logger.info('服务器正在关闭...')
+    finally:
+        loop.close()

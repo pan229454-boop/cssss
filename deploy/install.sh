@@ -20,9 +20,9 @@ SERVICE_NAME="nat-tunnel"
 
 echo ""
 echo "[1/5] 安装Python依赖..."
-pip3 install pyyaml aiohttp || {
+pip3 install pyyaml || {
     echo "pip3安装失败，尝试使用pip..."
-    pip install pyyaml aiohttp
+    pip install pyyaml
 }
 
 echo ""
