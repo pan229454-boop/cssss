@@ -206,7 +206,7 @@ class NATTunnelServer:
     async def _handle_client(self, reader, writer):
         """处理新的客户端连接"""
         addr = writer.get_extra_info('peername')
-        logger.info(f'新连接来自: {addr}')
+        logger.debug(f'新连接来自: {addr}')
 
         try:
             # 第一条消息必须是认证
@@ -214,7 +214,7 @@ class NATTunnelServer:
                 read_message(reader), timeout=10
             )
             if msg_type != MSG_AUTH:
-                logger.warning(f'期望认证消息，收到: {msg_type}')
+                logger.debug(f'非法连接 {addr}: 期望认证消息，收到 {msg_type}')
                 writer.close()
                 return
 
@@ -248,11 +248,14 @@ class NATTunnelServer:
             await self._client_message_loop(session)
 
         except asyncio.TimeoutError:
-            logger.warning(f'{addr} 认证超时')
-        except (asyncio.IncompleteReadError, ConnectionError) as e:
-            logger.info(f'连接中断: {addr} - {e}')
+            logger.debug(f'{addr} 认证超时')
+        except (asyncio.IncompleteReadError, ConnectionError):
+            logger.debug(f'连接中断: {addr}')
+        except ValueError:
+            # 协议不匹配（扫描器/爬虫等无效连接），静默处理
+            logger.debug(f'无效连接: {addr}')
         except Exception as e:
-            logger.error(f'处理客户端异常 {addr}: {e}', exc_info=True)
+            logger.warning(f'处理连接异常 {addr}: {e}')
         finally:
             # 清理
             for name, session in list(self.clients.items()):
