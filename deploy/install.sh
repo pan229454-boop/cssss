@@ -1,54 +1,127 @@
 #!/bin/bash
-# NAT Tunnel 宝塔面板一键部署脚本
-# 使用方式: bash install.sh
+# NAT Tunnel 一键部署脚本
+# 将项目上传到 /www/wwwroot/nat-tunnel 后执行：
+#   sudo bash /www/wwwroot/nat-tunnel/deploy/install.sh
 
 set -e
 
-echo "============================================"
-echo "  NAT Tunnel 内网穿透 - 宝塔面板部署脚本"
-echo "============================================"
-
-# 检查是否为root
-if [ "$EUID" -ne 0 ]; then
-    echo "请使用 root 权限运行此脚本"
-    exit 1
-fi
-
-# 安装目录
-INSTALL_DIR="/www/server/nat-tunnel"
-SERVICE_NAME="nat-tunnel"
+# ── 颜色输出 ───────────────────────────────────────
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BLUE='\033[0;34m'; NC='\033[0m'
+info()  { echo -e "${GREEN}[✓]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
+step()  { echo -e "\n${BLUE}━━ $* ${NC}"; }
 
 echo ""
-echo "[1/5] 安装Python依赖..."
-pip3 install --quiet pyyaml 2>/dev/null || pip install --quiet pyyaml 2>/dev/null || {
-    echo "  => pyyaml安装失败，请手动执行: pip3 install pyyaml"
-}
-
+echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║   NAT Tunnel 内网穿透 - 一键部署     ║${NC}"
+echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
 echo ""
-echo "[2/5] 创建安装目录..."
-mkdir -p "$INSTALL_DIR/server"
-mkdir -p "$INSTALL_DIR/web"
-mkdir -p "$INSTALL_DIR/logs"
 
-echo ""
-echo "[3/5] 复制文件..."
+# ── 权限检查 ──────────────────────────────────────
+[[ "$EUID" -ne 0 ]] && error "请使用 root 权限运行，例如：sudo bash $0"
+
+# ── 自动定位项目目录 ──────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+SERVER_DIR="$PROJECT_DIR/server"
+WEB_DIR="$PROJECT_DIR/web"
+LOG_DIR="$PROJECT_DIR/logs"
+CONFIG_FILE="$SERVER_DIR/config.yaml"
+SERVICE_NAME="nat-tunnel"
 
-cp "$PROJECT_DIR/server/server.py" "$INSTALL_DIR/server/"
-cp "$PROJECT_DIR/server/web_admin.py" "$INSTALL_DIR/server/"
-cp "$PROJECT_DIR/web/index.html" "$INSTALL_DIR/web/"
+# 验证项目文件完整性
+[ ! -f "$SERVER_DIR/server.py" ]   && error "未找到 server/server.py，请确认项目已完整上传到 $PROJECT_DIR"
+[ ! -f "$SERVER_DIR/web_admin.py" ] && error "未找到 server/web_admin.py"
+[ ! -f "$WEB_DIR/index.html" ]      && error "未找到 web/index.html"
 
-# 如果没有配置文件，复制默认配置
-if [ ! -f "$INSTALL_DIR/server/config.yaml" ]; then
-    cp "$PROJECT_DIR/server/config.yaml" "$INSTALL_DIR/server/"
-    echo "  => 已创建默认配置文件，请修改: $INSTALL_DIR/server/config.yaml"
-else
-    echo "  => 配置文件已存在，跳过覆盖"
+info "项目目录: $PROJECT_DIR"
+mkdir -p "$LOG_DIR"
+
+# ── 检查 Python ───────────────────────────────────
+step "检查 Python 环境"
+PYTHON=""
+for cmd in python3 python; do
+    if command -v "$cmd" &>/dev/null; then
+        ver=$($cmd -c 'import sys; print(sys.version_info[:2])' 2>/dev/null)
+        if $cmd -c 'import sys; exit(0 if sys.version_info >= (3,7) else 1)' 2>/dev/null; then
+            PYTHON="$cmd"
+            info "Python: $($cmd --version)"
+            break
+        fi
+    fi
+done
+if [ -z "$PYTHON" ]; then
+    step "安装 Python3"
+    if command -v apt-get &>/dev/null; then
+        apt-get update -qq && apt-get install -y -qq python3 python3-pip
+    elif command -v yum &>/dev/null; then
+        yum install -y python3 python3-pip
+    else
+        error "未找到 Python 3.7+，请先手动安装"
+    fi
+    PYTHON="python3"
+    info "Python3 安装完成"
 fi
 
-echo ""
-echo "[4/5] 创建systemd服务..."
+# ── 安装依赖 ──────────────────────────────────────
+step "安装 Python 依赖"
+$PYTHON -m pip install --quiet --upgrade pip 2>/dev/null || true
+$PYTHON -m pip install --quiet pyyaml 2>/dev/null \
+    || pip3 install --quiet pyyaml 2>/dev/null \
+    || warn "pyyaml 安装失败，请手动执行: pip3 install pyyaml（运行时若无 yaml 模块则使用内置 json 备选）"
+info "依赖安装完成"
+
+# ── 初始化配置文件（自动生成安全密钥） ────────────
+step "初始化配置文件"
+GEN_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(20))" 2>/dev/null \
+         || cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' \
+         || echo "change_me_$(date +%s)")
+GEN_PASS=$(python3 -c "import secrets; print(secrets.token_urlsafe(12))" 2>/dev/null \
+        || echo "Admin_$(date +%s | tail -c 8)")
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    cat > "$CONFIG_FILE" << YAML
+# NAT Tunnel 服务端配置
+# 自动生成于 $(date '+%Y-%m-%d %H:%M:%S')
+
+# 控制端口 - 客户端连接用
+control_port: 7000
+
+# 认证token - 客户端必须使用相同的token
+auth_token: "$GEN_TOKEN"
+
+# Web管理面板端口
+web_port: 7500
+
+# Web管理面板密码
+web_password: "$GEN_PASS"
+
+# 允许映射的端口范围
+allowed_ports: [10000, 60000]
+
+# 每个客户端最大隧道数
+max_tunnels_per_client: 10
+
+# 心跳间隔(秒)
+heartbeat_interval: 30
+
+# 心跳超时(秒)
+heartbeat_timeout: 90
+YAML
+    info "已自动生成配置文件（随机密钥）: $CONFIG_FILE"
+    CONFIG_CREATED=1
+else
+    info "配置文件已存在，跳过覆盖: $CONFIG_FILE"
+    CONFIG_CREATED=0
+    # 从现有配置中读取密钥用于输出
+    GEN_TOKEN=$(grep 'auth_token' "$CONFIG_FILE" | sed "s/.*: *\"//;s/\".*//")
+    GEN_PASS=$(grep 'web_password' "$CONFIG_FILE" | sed "s/.*: *\"//;s/\".*//")
+fi
+
+# ── 创建 systemd 服务 ────────────────────────────
+step "创建系统服务"
+PYTHON_BIN=$(command -v "$PYTHON")
 cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
 Description=NAT Tunnel Server - 内网穿透服务
@@ -57,12 +130,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=${INSTALL_DIR}/server
-ExecStart=/usr/bin/python3 ${INSTALL_DIR}/server/server.py
+WorkingDirectory=${SERVER_DIR}
+ExecStart=${PYTHON_BIN} ${SERVER_DIR}/server.py
 Restart=always
 RestartSec=5
-StandardOutput=append:${INSTALL_DIR}/logs/server.log
-StandardError=append:${INSTALL_DIR}/logs/error.log
+StandardOutput=append:${LOG_DIR}/server.log
+StandardError=append:${LOG_DIR}/error.log
 LimitNOFILE=65536
 
 [Install]
@@ -70,44 +143,84 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable ${SERVICE_NAME}
+systemctl enable ${SERVICE_NAME} --quiet
+info "systemd 服务已注册（开机自启）"
 
-echo ""
-echo "[5/5] 配置防火墙..."
-# 开放控制端口和Web端口
-if command -v firewall-cmd &> /dev/null; then
-    firewall-cmd --permanent --add-port=7000/tcp 2>/dev/null || true
-    firewall-cmd --permanent --add-port=7500/tcp 2>/dev/null || true
-    firewall-cmd --permanent --add-port=10000-60000/tcp 2>/dev/null || true
-    firewall-cmd --reload 2>/dev/null || true
-    echo "  => firewalld规则已添加"
-elif command -v ufw &> /dev/null; then
-    ufw allow 7000/tcp 2>/dev/null || true
-    ufw allow 7500/tcp 2>/dev/null || true
-    ufw allow 10000:60000/tcp 2>/dev/null || true
-    echo "  => ufw规则已添加"
+# ── 配置防火墙 ────────────────────────────────────
+step "配置防火墙"
+open_ports() {
+    local tool=$1
+    case $tool in
+        firewalld)
+            firewall-cmd --quiet --permanent --add-port=7000/tcp  2>/dev/null || true
+            firewall-cmd --quiet --permanent --add-port=7500/tcp  2>/dev/null || true
+            firewall-cmd --quiet --permanent --add-port=10000-60000/tcp 2>/dev/null || true
+            firewall-cmd --quiet --reload 2>/dev/null || true
+            info "firewalld 端口已开放"
+            ;;
+        ufw)
+            ufw allow 7000/tcp  >/dev/null 2>&1 || true
+            ufw allow 7500/tcp  >/dev/null 2>&1 || true
+            ufw allow 10000:60000/tcp >/dev/null 2>&1 || true
+            info "ufw 端口已开放"
+            ;;
+        iptables)
+            iptables -I INPUT -p tcp --dport 7000  -j ACCEPT 2>/dev/null || true
+            iptables -I INPUT -p tcp --dport 7500  -j ACCEPT 2>/dev/null || true
+            iptables -I INPUT -p tcp --dport 10000:60000 -j ACCEPT 2>/dev/null || true
+            info "iptables 规则已添加"
+            ;;
+    esac
+}
+
+if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
+    open_ports firewalld
+elif command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
+    open_ports ufw
+elif command -v iptables &>/dev/null; then
+    open_ports iptables
 else
-    echo "  => 未检测到防火墙，请手动开放端口: 7000, 7500, 10000-60000"
+    warn "未检测到防火墙工具，请在宝塔面板 → 安全 → 防火墙中手动放行端口 7000、7500、10000-60000"
 fi
 
+# ── 启动服务 ──────────────────────────────────────
+step "启动服务"
+systemctl restart ${SERVICE_NAME}
+sleep 2
+if systemctl is-active --quiet ${SERVICE_NAME}; then
+    info "服务运行正常 ✓"
+else
+    warn "服务启动可能失败，请执行: journalctl -u ${SERVICE_NAME} -n 30"
+fi
+
+# ── 获取服务器 IP ─────────────────────────────────
+SERVER_IP=$(curl -4 -fsSL --max-time 5 https://api.ipify.org 2>/dev/null \
+         || curl -4 -fsSL --max-time 5 https://ipecho.net/plain 2>/dev/null \
+         || hostname -I 2>/dev/null | awk '{print $1}' \
+         || echo "你的服务器IP")
+
+# ── 输出部署结果 ──────────────────────────────────
 echo ""
-echo "============================================"
-echo "  部署完成！"
-echo "============================================"
+echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║           🎉 部署完成！                      ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
-echo "配置文件: $INSTALL_DIR/server/config.yaml"
-echo "日志目录: $INSTALL_DIR/logs/"
+echo -e "  ${BLUE}Web 管理面板${NC}   http://${SERVER_IP}:7500"
+echo -e "  ${BLUE}管理面板密码${NC}   ${YELLOW}${GEN_PASS}${NC}"
+echo -e "  ${BLUE}认证 Token  ${NC}   ${YELLOW}${GEN_TOKEN}${NC}"
+echo -e "  ${BLUE}控制端口    ${NC}   ${SERVER_IP}:7000"
 echo ""
-echo "重要: 请先修改配置文件中的 auth_token 和 web_password！"
+echo -e "  ${BLUE}项目目录    ${NC}   ${PROJECT_DIR}"
+echo -e "  ${BLUE}配置文件    ${NC}   ${CONFIG_FILE}"
+echo -e "  ${BLUE}日志目录    ${NC}   ${LOG_DIR}/"
 echo ""
-echo "常用命令:"
-echo "  启动服务:   systemctl start ${SERVICE_NAME}"
-echo "  停止服务:   systemctl stop ${SERVICE_NAME}"
-echo "  重启服务:   systemctl restart ${SERVICE_NAME}"
-echo "  查看状态:   systemctl status ${SERVICE_NAME}"
-echo "  查看日志:   tail -f ${INSTALL_DIR}/logs/server.log"
+echo "  常用命令："
+echo "    systemctl status ${SERVICE_NAME}         # 查看状态"
+echo "    systemctl restart ${SERVICE_NAME}        # 重启"
+echo "    tail -f ${LOG_DIR}/server.log  # 实时日志"
 echo ""
-echo "Web管理面板: http://你的服务器IP:7500"
+if [ "${CONFIG_CREATED}" = "1" ]; then
+echo -e "  ${YELLOW}⚠ 以上密钥已自动生成并保存，可在管理面板 → 设置中随时修改${NC}"
+fi
+echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
 echo ""
-echo "在宝塔面板中也可以添加此服务进行管理"
-echo "============================================"
