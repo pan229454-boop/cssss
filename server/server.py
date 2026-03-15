@@ -485,8 +485,8 @@ class NATTunnelServer:
         tunnel.connections += 1
         self._stats['total_connections'] += 1
 
-        # 保存访问者连接
-        client_session.pending_connections[conn_id] = (visitor_reader, visitor_writer)
+        # 保存访问者连接（含tunnel_id，用于__CONN_READY__时启动relay）
+        client_session.pending_connections[conn_id] = (visitor_reader, visitor_writer, tunnel_id)
 
         # 通知客户端有新连接（携带tunnel信息以便客户端知道连接到哪个本地端口）
         new_conn_info = json.dumps({
@@ -498,10 +498,7 @@ class NATTunnelServer:
 
         try:
             await client_session.send(MSG_DATA, self._pack_data_header(conn_id, b'__NEW_CONN__' + new_conn_info))
-            # 开始从访问者读数据并转发给客户端
-            asyncio.ensure_future(
-                self._relay_visitor_to_client(visitor_reader, client_session, conn_id, tunnel)
-            )
+            # relay 在客户端发回 __CONN_READY__ 后再启动，避免数据在连接建立前丢失
         except Exception as e:
             logger.error(f'通知客户端失败: {e}')
             client_session.pending_connections.pop(conn_id, None)
@@ -548,17 +545,26 @@ class NATTunnelServer:
         conn_id, data = self._unpack_data_header(body)
 
         if data == b'__CONN_READY__':
-            # 客户端已准备好接收数据
+            # 客户端本地连接已就绪，现在才开始将访问者数据转发给客户端
+            # 这样避免了访问者数据在客户端建立本地连接前被丢弃的竞争条件
+            conn = session.pending_connections.get(conn_id)
+            if conn:
+                visitor_reader, visitor_writer, t_id = conn
+                tunnel = self.tunnels.get(t_id)
+                if tunnel:
+                    asyncio.ensure_future(
+                        self._relay_visitor_to_client(visitor_reader, session, conn_id, tunnel)
+                    )
             return
 
         conn = session.pending_connections.get(conn_id)
         if not conn:
             return
 
-        visitor_reader, visitor_writer = conn
+        visitor_reader, visitor_writer, t_id = conn
+        tunnel = self.tunnels.get(t_id)
         try:
-            # 更新统计
-            for tunnel in session.tunnels.values():
+            if tunnel:
                 tunnel.bytes_out += len(data)
             self._stats['total_bytes_out'] += len(data)
 
@@ -575,10 +581,10 @@ class NATTunnelServer:
         """处理关闭连接请求"""
         data = json.loads(body)
         conn_id = data.get('conn_id')
-        # TCP连接
+        # TCP连接（3-tuple: reader, writer, tunnel_id）
         conn = session.pending_connections.pop(conn_id, None)
         if conn:
-            _, visitor_writer = conn
+            _, visitor_writer, *_ = conn
             try:
                 visitor_writer.close()
             except Exception:

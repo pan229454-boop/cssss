@@ -96,6 +96,7 @@ class NATTunnelClient:
         self._running = False
         self._local_connections = {}
         self._udp_connections = {}     # conn_id -> (transport, UDPLocalProtocol)
+        self._pending_conns = {}       # conn_id -> [buffered_data]  建立中缓冲
         self._write_lock = asyncio.Lock()
         self._log = log_callback or (lambda msg: None)
 
@@ -203,7 +204,12 @@ class NATTunnelClient:
             except (json.JSONDecodeError, KeyError):
                 local_addr = '127.0.0.1'
                 local_port = self.tunnels_config[0]['local_port'] if self.tunnels_config else None
+            self._pending_conns[conn_id] = []
             asyncio.create_task(self._establish_local(conn_id, local_addr, local_port))
+            return
+        # 连接建立中将数据入缓冲
+        if conn_id in self._pending_conns:
+            self._pending_conns[conn_id].append(data)
             return
         local = self._local_connections.get(conn_id)
         if local:
@@ -221,14 +227,22 @@ class NATTunnelClient:
 
     async def _establish_local(self, conn_id, local_addr, local_port):
         if not local_port:
+            self._pending_conns.pop(conn_id, None)
             return
         try:
             lr, lw = await asyncio.open_connection(local_addr, int(local_port))
             self._local_connections[conn_id] = (lr, lw)
             await self._send(MSG_DATA, pack_data_header(conn_id, b'__CONN_READY__'))
+            # 充偿建立期间缓存的数据
+            buffered = self._pending_conns.pop(conn_id, [])
+            if buffered:
+                for buf_data in buffered:
+                    lw.write(buf_data)
+                await lw.drain()
             asyncio.create_task(self._relay_local(lr, conn_id))
         except Exception as e:
             self._log(f'连接本地 {local_addr}:{local_port} 失败: {e}')
+            self._pending_conns.pop(conn_id, None)
             await self._send(MSG_CLOSE_CONN, json.dumps({'conn_id': conn_id}).encode())
 
     async def _relay_local(self, lr, conn_id):
@@ -250,6 +264,7 @@ class NATTunnelClient:
     async def _handle_close_conn(self, body):
         data = json.loads(body)
         conn_id = data.get('conn_id')
+        self._pending_conns.pop(conn_id, None)
         local = self._local_connections.pop(conn_id, None)
         if local:
             try:

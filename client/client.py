@@ -114,6 +114,7 @@ class NATTunnelClient:
         self._running = False
         self._local_connections = {}   # conn_id -> (local_reader, local_writer) [TCP]
         self._udp_connections = {}     # conn_id -> (transport, UDPLocalProtocol) [UDP]
+        self._pending_conns = {}       # conn_id -> [buffered_data]  建立中的连接缓冲
         self._write_lock = asyncio.Lock()
 
     async def _send(self, msg_type, body):
@@ -247,7 +248,14 @@ class NATTunnelClient:
             except (json.JSONDecodeError, KeyError):
                 local_addr = '127.0.0.1'
                 local_port = self.tunnels[0]['local_port'] if self.tunnels else None
+            # 先初始化缓冲再启动任务，避免竞争条件
+            self._pending_conns[conn_id] = []
             asyncio.create_task(self._establish_local_conn(conn_id, local_addr, local_port))
+            return
+
+        # 如果本地连接尚在建立中，将数据入缓冲并等待
+        if conn_id in self._pending_conns:
+            self._pending_conns[conn_id].append(data)
             return
 
         # 转发数据到本地连接
@@ -270,6 +278,7 @@ class NATTunnelClient:
         """建立到本地服务的连接"""
         if not local_port:
             logger.error(f'无法为 conn {conn_id} 找到本地端口')
+            self._pending_conns.pop(conn_id, None)
             return
 
         try:
@@ -281,12 +290,20 @@ class NATTunnelClient:
             # 通知服务端连接已建立
             await self._send(MSG_DATA, pack_data_header(conn_id, b'__CONN_READY__'))
 
+            # 充偿建立期间缓存的数据并发送给本地服务
+            buffered = self._pending_conns.pop(conn_id, [])
+            if buffered:
+                for buf_data in buffered:
+                    local_writer.write(buf_data)
+                await local_writer.drain()
+
             # 开始从本地读数据并发送给服务端
             asyncio.create_task(
                 self._relay_local_to_server(local_reader, conn_id)
             )
         except Exception as e:
             logger.error(f'连接本地服务失败 {local_addr}:{local_port}: {e}')
+            self._pending_conns.pop(conn_id, None)
             close_body = json.dumps({'conn_id': conn_id}).encode()
             await self._send(MSG_CLOSE_CONN, close_body)
 
