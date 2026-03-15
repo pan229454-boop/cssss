@@ -49,6 +49,7 @@ MSG_HEARTBEAT_RESP = 0x08
 MSG_CLOSE_TUNNEL = 0x09
 MSG_LIST_TUNNELS = 0x0A
 MSG_LIST_TUNNELS_RESP = 0x0B
+MSG_UDP_DATA = 0x0C        # UDP数据报
 
 # 头部: version(1) + msg_type(1) + body_length(4) = 6 bytes
 HEADER_SIZE = 6
@@ -96,19 +97,102 @@ async def read_message(reader: asyncio.StreamReader):
     return msg_type, body
 
 
+class UDPTunnelProtocol(asyncio.DatagramProtocol):
+    """UDP隧道监听器 - 接收公网UDP数据报并通过控制通道转给客户端"""
+
+    def __init__(self, tunnel_id, server):
+        self.tunnel_id = tunnel_id
+        self.server = server
+        self.transport = None
+        self._addr_to_conn = {}   # remote_addr(tuple) -> conn_id
+        self._conn_to_addr = {}   # conn_id -> remote_addr(tuple)
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
+        asyncio.ensure_future(self._dispatch(data, addr))
+
+    async def _dispatch(self, data, addr):
+        tunnel = self.server.tunnels.get(self.tunnel_id)
+        if not tunnel:
+            return
+        client = self.server.clients.get(tunnel.client_name)
+        if not client:
+            return
+
+        conn_id = self._addr_to_conn.get(addr)
+        is_new = conn_id is None
+        if is_new:
+            conn_id = self.server._next_conn_id()
+            self._addr_to_conn[addr] = conn_id
+            self._conn_to_addr[conn_id] = addr
+            self.server._udp_conns[conn_id] = self
+            tunnel.connections += 1
+            self.server._stats['total_connections'] += 1
+            # 通知客户端有新的虚拟UDP连接
+            new_info = json.dumps({
+                'conn_id': conn_id,
+                'tunnel_id': self.tunnel_id,
+                'local_addr': tunnel.local_addr,
+                'local_port': tunnel.local_port,
+                'protocol': 'udp',
+            }).encode()
+            pkt = self.server._pack_data_header(conn_id, b'__NEW_UDP_CONN__' + new_info)
+            await client.send(MSG_UDP_DATA, pkt)
+
+        tunnel.bytes_in += len(data)
+        self.server._stats['total_bytes_in'] += len(data)
+        pkt = self.server._pack_data_header(conn_id, data)
+        await client.send(MSG_UDP_DATA, pkt)
+
+    def send_to_remote(self, conn_id, data):
+        """将来自客户端的UDP响应发回原始访问者"""
+        addr = self._conn_to_addr.get(conn_id)
+        if addr and self.transport:
+            try:
+                self.transport.sendto(data, addr)
+            except Exception:
+                pass
+
+    def remove_conn(self, conn_id):
+        addr = self._conn_to_addr.pop(conn_id, None)
+        if addr:
+            self._addr_to_conn.pop(addr, None)
+        self.server._udp_conns.pop(conn_id, None)
+
+    def close(self):
+        if self.transport:
+            try:
+                self.transport.close()
+            except Exception:
+                pass
+        self._addr_to_conn.clear()
+        self._conn_to_addr.clear()
+
+    def error_received(self, exc):
+        logger.debug(f'UDP隧道 {self.tunnel_id} 错误: {exc}')
+
+    def connection_lost(self, exc):
+        pass
+
+
 class TunnelInfo:
     """隧道信息"""
-    def __init__(self, tunnel_id, client_name, remote_port, local_addr, local_port):
+    def __init__(self, tunnel_id, client_name, remote_port, local_addr, local_port, protocol='tcp'):
         self.tunnel_id = tunnel_id
         self.client_name = client_name
         self.remote_port = remote_port
         self.local_addr = local_addr
         self.local_port = local_port
+        self.protocol = protocol
         self.created_at = time.time()
         self.connections = 0
         self.bytes_in = 0
         self.bytes_out = 0
-        self.listener_server = None
+        self.listener_server = None   # TCP: asyncio server
+        self.udp_protocol = None      # UDPTunnelProtocol（UDP隧道）
+        self.udp_transport = None     # UDP asyncio transport
 
 
 class ClientSession:
@@ -141,6 +225,7 @@ class NATTunnelServer:
         self._running = False
         self._tunnel_counter = 0
         self._conn_counter = 0
+        self._udp_conns = {}   # conn_id -> UDPTunnelProtocol（用于UDP响应回程路由）
         self._stats = {
             'total_connections': 0,
             'total_bytes_in': 0,
@@ -288,6 +373,9 @@ class NATTunnelServer:
             elif msg_type == MSG_CLOSE_CONN:
                 await self._handle_close_conn(session, body)
 
+            elif msg_type == MSG_UDP_DATA:
+                await self._handle_udp_data(session, body)
+
             elif msg_type == MSG_LIST_TUNNELS:
                 await self._handle_list_tunnels(session)
 
@@ -332,18 +420,29 @@ class NATTunnelServer:
             return
 
         tunnel_id = self._next_tunnel_id()
+        protocol = data.get('protocol', 'tcp').lower()
         tunnel = TunnelInfo(
             tunnel_id, session.client_name,
-            remote_port, local_addr, local_port
+            remote_port, local_addr, local_port, protocol
         )
 
         # 在远程端口启动监听
         try:
-            listener = await asyncio.start_server(
-                lambda r, w: self._handle_visitor(r, w, tunnel_id),
-                '0.0.0.0', remote_port
-            )
-            tunnel.listener_server = listener
+            if protocol == 'udp':
+                loop = asyncio.get_event_loop()
+                udp_proto = UDPTunnelProtocol(tunnel_id, self)
+                transport, _ = await loop.create_datagram_endpoint(
+                    lambda: udp_proto,
+                    local_addr=('0.0.0.0', remote_port)
+                )
+                tunnel.udp_protocol = udp_proto
+                tunnel.udp_transport = transport
+            else:
+                listener = await asyncio.start_server(
+                    lambda r, w: self._handle_visitor(r, w, tunnel_id),
+                    '0.0.0.0', remote_port
+                )
+                tunnel.listener_server = listener
         except OSError as e:
             resp = json.dumps({
                 'success': False,
@@ -359,12 +458,12 @@ class NATTunnelServer:
         resp = json.dumps({
             'success': True,
             'tunnel_id': tunnel_id,
-            'message': f'隧道已建立 :{remote_port} -> {local_addr}:{local_port}'
+            'message': f'隧道已建立 [{protocol.upper()}] :{remote_port} -> {local_addr}:{local_port}'
         }).encode()
         await session.send(MSG_NEW_TUNNEL_RESP, resp)
         logger.info(
             f'隧道建立: {tunnel_id} | {session.client_name} | '
-            f':{remote_port} -> {local_addr}:{local_port}'
+            f'[{protocol.upper()}] :{remote_port} -> {local_addr}:{local_port}'
         )
 
     async def _handle_visitor(self, visitor_reader, visitor_writer, tunnel_id):
@@ -476,6 +575,7 @@ class NATTunnelServer:
         """处理关闭连接请求"""
         data = json.loads(body)
         conn_id = data.get('conn_id')
+        # TCP连接
         conn = session.pending_connections.pop(conn_id, None)
         if conn:
             _, visitor_writer = conn
@@ -483,6 +583,23 @@ class NATTunnelServer:
                 visitor_writer.close()
             except Exception:
                 pass
+            return
+        # UDP虚拟连接
+        udp_proto = self._udp_conns.get(conn_id)
+        if udp_proto:
+            udp_proto.remove_conn(conn_id)
+
+    async def _handle_udp_data(self, session: ClientSession, body: bytes):
+        """处理来自客户端的UDP响应数据"""
+        conn_id, data = self._unpack_data_header(body)
+        udp_proto = self._udp_conns.get(conn_id)
+        if not udp_proto:
+            return
+        tunnel = self.tunnels.get(udp_proto.tunnel_id)
+        if tunnel:
+            tunnel.bytes_out += len(data)
+        self._stats['total_bytes_out'] += len(data)
+        udp_proto.send_to_remote(conn_id, data)
 
     async def _handle_close_tunnel(self, session: ClientSession, body: bytes):
         """处理关闭隧道请求"""
@@ -514,6 +631,8 @@ class NATTunnelServer:
         self.port_to_tunnel.pop(tunnel.remote_port, None)
         if tunnel.listener_server:
             tunnel.listener_server.close()
+        if tunnel.udp_protocol:
+            tunnel.udp_protocol.close()
         client = self.clients.get(tunnel.client_name)
         if client:
             client.tunnels.pop(tunnel_id, None)
@@ -554,6 +673,7 @@ class NATTunnelServer:
                     'remote_port': t.remote_port,
                     'local_addr': t.local_addr,
                     'local_port': t.local_port,
+                    'protocol': t.protocol,
                     'connections': t.connections,
                     'bytes_in': t.bytes_in,
                     'bytes_out': t.bytes_out,

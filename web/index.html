@@ -973,6 +973,7 @@ bash deploy/setup_vpn.sh</div>
                                 <th>隧道ID</th>
                                 <th>公网端口</th>
                                 <th>内网地址</th>
+                                <th>协议</th>
                                 <th>连接数</th>
                                 <th>入站</th>
                                 <th>出站</th>
@@ -981,11 +982,15 @@ bash deploy/setup_vpn.sh</div>
                         </thead>
                         <tbody>`;
                     for (const t of client.tunnels) {
+                        const proto = (t.protocol || 'tcp').toUpperCase();
+                        const protoColor = t.protocol === 'udp' ? '#1565c0' : '#2e7d32';
+                        const protoBg = t.protocol === 'udp' ? '#e3f2fd' : '#e8f5e9';
                         html += `
                             <tr>
                                 <td>${escapeHtml(t.tunnel_id)}</td>
                                 <td><strong>:${t.remote_port}</strong></td>
                                 <td>${escapeHtml(t.local_addr)}:${t.local_port}</td>
+                                <td><span class="badge" style="background:${protoBg};color:${protoColor}">${proto}</span></td>
                                 <td>${t.connections}</td>
                                 <td>${formatBytes(t.bytes_in)}</td>
                                 <td>${formatBytes(t.bytes_out)}</td>

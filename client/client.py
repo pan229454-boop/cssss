@@ -34,6 +34,7 @@ MSG_HEARTBEAT_RESP = 0x08
 MSG_CLOSE_TUNNEL = 0x09
 MSG_LIST_TUNNELS = 0x0A
 MSG_LIST_TUNNELS_RESP = 0x0B
+MSG_UDP_DATA = 0x0C        # UDP数据报
 
 HEADER_SIZE = 6
 MAX_BODY_SIZE = 1024 * 1024
@@ -76,6 +77,28 @@ def unpack_data_header(body: bytes):
     return conn_id, data
 
 
+class _UDPLocalProtocol(asyncio.DatagramProtocol):
+    """UDP本地转发协议 - 将本地UDP服务的响应发回服务端"""
+
+    def __init__(self, conn_id, client):
+        self.conn_id = conn_id
+        self.client = client
+        self.transport = None
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
+        payload = pack_data_header(self.conn_id, data)
+        asyncio.ensure_future(self.client._send(MSG_UDP_DATA, payload))
+
+    def error_received(self, exc):
+        pass
+
+    def connection_lost(self, exc):
+        self.client._udp_connections.pop(self.conn_id, None)
+
+
 class NATTunnelClient:
     """NAT隧道客户端"""
 
@@ -89,7 +112,8 @@ class NATTunnelClient:
         self.reader = None
         self.writer = None
         self._running = False
-        self._local_connections = {}  # conn_id -> (local_reader, local_writer)
+        self._local_connections = {}   # conn_id -> (local_reader, local_writer) [TCP]
+        self._udp_connections = {}     # conn_id -> (transport, UDPLocalProtocol) [UDP]
         self._write_lock = asyncio.Lock()
 
     async def _send(self, msg_type, body):
@@ -133,11 +157,13 @@ class NATTunnelClient:
             remote_port = tunnel_cfg['remote_port']
             local_addr = tunnel_cfg.get('local_addr', '127.0.0.1')
             local_port = tunnel_cfg['local_port']
+            protocol = tunnel_cfg.get('protocol', 'tcp').lower()
 
             req = json.dumps({
                 'remote_port': remote_port,
                 'local_addr': local_addr,
                 'local_port': local_port,
+                'protocol': protocol,
             }).encode()
             await self._send(MSG_NEW_TUNNEL, req)
 
@@ -175,6 +201,9 @@ class NATTunnelClient:
 
                 elif msg_type == MSG_DATA:
                     await self._handle_data(body)
+
+                elif msg_type == MSG_UDP_DATA:
+                    await self._handle_udp_data(body)
 
                 elif msg_type == MSG_CLOSE_CONN:
                     await self._handle_close_conn(body)
@@ -286,6 +315,7 @@ class NATTunnelClient:
         """处理关闭连接"""
         data = json.loads(body)
         conn_id = data.get('conn_id')
+        # TCP
         local = self._local_connections.pop(conn_id, None)
         if local:
             _, local_writer = local
@@ -293,6 +323,51 @@ class NATTunnelClient:
                 local_writer.close()
             except Exception:
                 pass
+            return
+        # UDP
+        conn = self._udp_connections.pop(conn_id, None)
+        if conn:
+            transport, _ = conn
+            try:
+                transport.close()
+            except Exception:
+                pass
+
+    async def _handle_udp_data(self, body: bytes):
+        """处理UDP数据报（服务端转发来的UDP数据）"""
+        conn_id, data = unpack_data_header(body)
+
+        if data[:16] == b'__NEW_UDP_CONN__':
+            # 新虚拟UDP连接
+            try:
+                info = json.loads(data[16:])
+                local_addr = info.get('local_addr', '127.0.0.1')
+                local_port = info.get('local_port')
+            except Exception:
+                return
+            if not local_port:
+                return
+            try:
+                loop = asyncio.get_event_loop()
+                proto = _UDPLocalProtocol(conn_id, self)
+                transport, _ = await loop.create_datagram_endpoint(
+                    lambda: proto,
+                    remote_addr=(local_addr, int(local_port))
+                )
+                self._udp_connections[conn_id] = (transport, proto)
+                logger.debug(f'UDP虚拟连接已建立: {conn_id} -> {local_addr}:{local_port}')
+            except Exception as e:
+                logger.error(f'建立本地UDP连接失败 {local_addr}:{local_port}: {e}')
+            return
+
+        # 转发UDP数据报到本地服务
+        conn = self._udp_connections.get(conn_id)
+        if conn:
+            transport, _ = conn
+            try:
+                transport.sendto(data)
+            except Exception:
+                self._udp_connections.pop(conn_id, None)
 
     def _print_tunnels(self, tunnels):
         """打印隧道列表"""

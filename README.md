@@ -150,12 +150,28 @@ client_name: "我的电脑"
 auth_token: "与服务端一致的密钥"
 
 tunnels:
+  # TCP 隧道（默认）
   - remote_port: 10022        # 公网映射端口
     local_addr: "127.0.0.1"
-    local_port: 22            # 本机端口
+    local_port: 22            # 本机SSH
+    protocol: tcp             # 可省略，默认tcp
+
   - remote_port: 18080
     local_addr: "127.0.0.1"
     local_port: 8080
+    protocol: tcp
+
+  # UDP 隧道 - DNS转发示例
+  - remote_port: 10053
+    local_addr: "127.0.0.1"
+    local_port: 53
+    protocol: udp
+
+  # UDP 隧道 - 游戏服务器示例
+  - remote_port: 27015
+    local_addr: "127.0.0.1"
+    local_port: 27015
+    protocol: udp
 ```
 
 ---
@@ -224,7 +240,7 @@ cat /www/wwwroot/nat-tunnel/server/config.yaml | grep web_password
 ```
 
 **Q: 支持UDP吗？**
-当前版本仅支持 TCP 端口转发。
+支持 TCP 和 UDP，在隧道配置中添加 `protocol: udp` 即可。DNS、游戏服务器、VoIP 等 UDP 服务均可穿透。
 
 ---
 

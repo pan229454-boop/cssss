@@ -23,15 +23,29 @@ max_retries: 0
 
 # 隧道列表 - 定义需要映射的端口
 tunnels:
-  # 示例1: 将内网的SSH端口映射到公网
+  # TCP示例1: 将内网的SSH端口映射到公网
   - remote_port: 10022    # 公网服务器上开放的端口
     local_addr: "127.0.0.1"  # 内网地址
     local_port: 22           # 内网端口
+    protocol: tcp            # 协议：tcp 或 udp（默认tcp）
 
-  # 示例2: 将内网Web服务映射到公网
+  # TCP示例2: 将内网Web服务映射到公网
   - remote_port: 18080
     local_addr: "127.0.0.1"
     local_port: 8080
+    protocol: tcp
+
+  # UDP示例: DNS转发（将内网DNS服务暴露到公网）
+  # - remote_port: 10053
+  #   local_addr: "127.0.0.1"
+  #   local_port: 53
+  #   protocol: udp
+
+  # UDP示例2: 過道内网游戏服务器（UDP）
+  # - remote_port: 27015
+  #   local_addr: "127.0.0.1"
+  #   local_port: 27015
+  #   protocol: udp
 
   # 示例3: 映射内网其他设备的服务
   # - remote_port: 13389

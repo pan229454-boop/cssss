@@ -27,6 +27,7 @@ MSG_CLOSE_CONN = 0x06
 MSG_HEARTBEAT = 0x07
 MSG_HEARTBEAT_RESP = 0x08
 MSG_CLOSE_TUNNEL = 0x09
+MSG_UDP_DATA = 0x0C        # UDP数据报
 
 HEADER_SIZE = 6
 MAX_BODY_SIZE = 1024 * 1024
@@ -61,6 +62,27 @@ def unpack_data_header(body: bytes):
 
 
 # ============== 客户端核心 ==============
+class _UDPLocalProtocol(asyncio.DatagramProtocol):
+    """UDP本地转发协议"""
+    def __init__(self, conn_id, client):
+        self.conn_id = conn_id
+        self.client = client
+        self.transport = None
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
+        payload = pack_data_header(self.conn_id, data)
+        asyncio.ensure_future(self.client._send(MSG_UDP_DATA, payload))
+
+    def error_received(self, exc):
+        pass
+
+    def connection_lost(self, exc):
+        self.client._udp_connections.pop(self.conn_id, None)
+
+
 class NATTunnelClient:
     def __init__(self, config, log_callback=None):
         self.server_addr = config['server_addr']
@@ -73,6 +95,7 @@ class NATTunnelClient:
         self.writer = None
         self._running = False
         self._local_connections = {}
+        self._udp_connections = {}     # conn_id -> (transport, UDPLocalProtocol)
         self._write_lock = asyncio.Lock()
         self._log = log_callback or (lambda msg: None)
 
@@ -108,10 +131,12 @@ class NATTunnelClient:
             remote_port = int(t['remote_port'])
             local_addr = t.get('local_addr', '127.0.0.1')
             local_port = int(t['local_port'])
+            protocol = t.get('protocol', 'tcp').lower()
             req = json.dumps({
                 'remote_port': remote_port,
                 'local_addr': local_addr,
                 'local_port': local_port,
+                'protocol': protocol,
             }).encode()
             await self._send(MSG_NEW_TUNNEL, req)
             msg_type, body = await asyncio.wait_for(read_message(self.reader), timeout=10)
@@ -135,6 +160,8 @@ class NATTunnelClient:
                     pass
                 elif msg_type == MSG_DATA:
                     await self._handle_data(body)
+                elif msg_type == MSG_UDP_DATA:
+                    await self._handle_udp_data(body)
                 elif msg_type == MSG_CLOSE_CONN:
                     await self._handle_close_conn(body)
                 elif msg_type == MSG_NEW_TUNNEL_RESP:
@@ -229,6 +256,42 @@ class NATTunnelClient:
                 local[1].close()
             except Exception:
                 pass
+            return
+        conn = self._udp_connections.pop(conn_id, None)
+        if conn:
+            try:
+                conn[0].close()
+            except Exception:
+                pass
+
+    async def _handle_udp_data(self, body):
+        conn_id, data = unpack_data_header(body)
+        if data[:16] == b'__NEW_UDP_CONN__':
+            try:
+                info = json.loads(data[16:])
+                local_addr = info.get('local_addr', '127.0.0.1')
+                local_port = info.get('local_port')
+            except Exception:
+                return
+            if not local_port:
+                return
+            try:
+                loop = asyncio.get_event_loop()
+                proto = _UDPLocalProtocol(conn_id, self)
+                transport, _ = await loop.create_datagram_endpoint(
+                    lambda: proto,
+                    remote_addr=(local_addr, int(local_port))
+                )
+                self._udp_connections[conn_id] = (transport, proto)
+            except Exception as e:
+                self._log(f'UDP连接本地服务失败 {local_addr}:{local_port}: {e}')
+            return
+        conn = self._udp_connections.get(conn_id)
+        if conn:
+            try:
+                conn[0].sendto(data)
+            except Exception:
+                self._udp_connections.pop(conn_id, None)
 
 
 # ============== GUI 界面 ==============
@@ -251,8 +314,13 @@ class TunnelRow:
         self.local_port = ttk.Entry(self.frame, width=8)
         self.local_port.grid(row=0, column=5, padx=(0, 10))
 
+        ttk.Label(self.frame, text='协议:').grid(row=0, column=6, padx=(0, 4))
+        self.protocol = ttk.Combobox(self.frame, width=5, values=['tcp', 'udp'], state='readonly')
+        self.protocol.set('tcp')
+        self.protocol.grid(row=0, column=7, padx=(0, 10))
+
         self.del_btn = ttk.Button(self.frame, text='删除', width=4, command=on_delete)
-        self.del_btn.grid(row=0, column=6)
+        self.del_btn.grid(row=0, column=8)
 
     def get_config(self):
         rp = self.remote_port.get().strip()
@@ -264,6 +332,7 @@ class TunnelRow:
             'remote_port': int(rp),
             'local_addr': la or '127.0.0.1',
             'local_port': int(lp),
+            'protocol': self.protocol.get() or 'tcp',
         }
 
     def destroy(self):
@@ -353,7 +422,7 @@ class NATTunnelGUI:
                                                    font=('Consolas', 9), wrap='word')
         self.log_text.pack(fill='both', expand=True)
 
-    def _add_tunnel_row(self, remote_port='', local_addr='127.0.0.1', local_port=''):
+    def _add_tunnel_row(self, remote_port='', local_addr='127.0.0.1', local_port='', protocol='tcp'):
         idx = len(self._tunnel_rows)
         row = TunnelRow(self.tunnels_container, idx, lambda r=None: self._del_tunnel_row(r))
         # 用闭包绑定正确的row
@@ -365,6 +434,7 @@ class NATTunnelGUI:
             row.local_addr.insert(0, local_addr)
         if local_port:
             row.local_port.insert(0, str(local_port))
+        row.protocol.set(protocol or 'tcp')
         self._tunnel_rows.append(row)
 
     def _del_tunnel_row(self, row):
@@ -414,6 +484,7 @@ class NATTunnelGUI:
                     t.get('remote_port', ''),
                     t.get('local_addr', '127.0.0.1'),
                     t.get('local_port', ''),
+                    t.get('protocol', 'tcp'),
                 )
             if not self._tunnel_rows:
                 self._add_tunnel_row()
