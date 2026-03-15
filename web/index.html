@@ -268,6 +268,116 @@
             .tunnel-table { font-size: 12px; }
             .tunnel-table th, .tunnel-table td { padding: 8px 10px; }
         }
+
+        /* Settings Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.active { display: flex; }
+
+        .modal-box {
+            background: white;
+            border-radius: 12px;
+            padding: 32px;
+            width: 500px;
+            max-width: 95vw;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .modal-box h2 {
+            font-size: 20px;
+            margin-bottom: 24px;
+            color: var(--text);
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 16px; right: 20px;
+            background: none;
+            border: none;
+            font-size: 22px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            line-height: 1;
+        }
+        .modal-close:hover { color: var(--text); }
+
+        .settings-section {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .settings-section h3 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            color: var(--text);
+        }
+
+        .settings-section .input-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+
+        .settings-section input {
+            flex: 1;
+            padding: 9px 12px;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        .settings-section input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .settings-section .field-group {
+            margin-bottom: 10px;
+        }
+
+        .settings-section .field-group label {
+            display: block;
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .settings-section .field-group input {
+            width: 100%;
+        }
+
+        .settings-msg {
+            margin-top: 10px;
+            font-size: 13px;
+            min-height: 18px;
+            padding: 0 2px;
+        }
+
+        .settings-msg.success { color: var(--success); }
+        .settings-msg.error { color: var(--danger); }
+
+        .btn-secondary {
+            background: #f0f2f5;
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .btn-secondary:hover { background: #e4e6ea; }
     </style>
 </head>
 <body>
@@ -289,6 +399,7 @@
             <h1>🔗 NAT Tunnel 管理面板</h1>
             <div class="nav-right">
                 <span class="refresh-info" id="refreshInfo">每5秒自动刷新</span>
+                <button class="btn btn-secondary btn-small" onclick="openSettings()">⚙️ 设置</button>
                 <button class="btn btn-danger btn-small" onclick="logout()">退出登录</button>
             </div>
         </nav>
@@ -329,6 +440,64 @@
                     <div class="icon">📡</div>
                     <p>暂无在线客户端</p>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal-box">
+            <button class="modal-close" onclick="closeSettings()">✕</button>
+            <h2>⚙️ 系统设置</h2>
+
+            <!-- 修改密码 -->
+            <div class="settings-section">
+                <h3>🔑 修改登录密码</h3>
+                <div class="field-group">
+                    <label>当前密码</label>
+                    <input type="password" id="oldPassword" placeholder="请输入当前密码">
+                </div>
+                <div class="field-group">
+                    <label>新密码（至少6位）</label>
+                    <input type="password" id="newPassword" placeholder="请输入新密码">
+                </div>
+                <div class="field-group">
+                    <label>确认新密码</label>
+                    <input type="password" id="confirmPassword" placeholder="再次输入新密码">
+                </div>
+                <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="changePassword()">修改密码</button>
+                <div class="settings-msg" id="passwordMsg"></div>
+            </div>
+
+            <!-- 修改认证Token -->
+            <div class="settings-section">
+                <h3>🔐 修改认证 Token</h3>
+                <p style="font-size:13px;color:#666;margin-bottom:12px">客户端与服务端通信所用的认证密钥，修改后已连接的客户端不受影响，新连接需使用新Token。</p>
+                <div class="field-group">
+                    <label>新 Token</label>
+                    <div class="input-row">
+                        <input type="text" id="newToken" placeholder="输入新Token（至少8位）">
+                        <button class="btn btn-secondary" onclick="generateToken()" title="随机生成">🎲 随机</button>
+                    </div>
+                </div>
+                <button class="btn btn-primary" style="width:100%" onclick="changeToken()">保存 Token</button>
+                <div class="settings-msg" id="tokenMsg"></div>
+            </div>
+
+            <!-- 修改服务器地址 -->
+            <div class="settings-section">
+                <h3>🌐 服务器地址</h3>
+                <p style="font-size:13px;color:#666;margin-bottom:12px">记录此服务器的公网IP或域名，方便客户端配置参考。</p>
+                <div class="field-group">
+                    <label>服务器控制端口</label>
+                    <input type="text" id="displayControlPort" disabled style="background:#f5f5f5;color:#888;">
+                </div>
+                <div class="field-group">
+                    <label>公网IP / 域名</label>
+                    <input type="text" id="serverHost" placeholder="例如：1.2.3.4 或 example.com">
+                </div>
+                <button class="btn btn-primary" style="width:100%" onclick="changeAddress()">保存地址</button>
+                <div class="settings-msg" id="addressMsg"></div>
             </div>
         </div>
     </div>
@@ -547,6 +716,130 @@
                 alert('操作失败: ' + e.message);
             }
         }
+
+        // ========= Settings =========
+        async function openSettings() {
+            document.getElementById('settingsModal').classList.add('active');
+            clearSettingsMsgs();
+            // Load current settings
+            try {
+                const resp = await fetch('/api/settings', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    document.getElementById('newToken').value = data.auth_token || '';
+                    document.getElementById('serverHost').value = data.server_host || '';
+                    document.getElementById('displayControlPort').value = data.control_port || 7000;
+                }
+            } catch (e) {}
+        }
+
+        function closeSettings() {
+            document.getElementById('settingsModal').classList.remove('active');
+            clearSettingsMsgs();
+        }
+
+        function clearSettingsMsgs() {
+            ['passwordMsg','tokenMsg','addressMsg'].forEach(id => {
+                const el = document.getElementById(id);
+                el.textContent = '';
+                el.className = 'settings-msg';
+            });
+            document.getElementById('oldPassword').value = '';
+            document.getElementById('newPassword').value = '';
+            document.getElementById('confirmPassword').value = '';
+        }
+
+        function showMsg(id, text, type) {
+            const el = document.getElementById(id);
+            el.textContent = text;
+            el.className = 'settings-msg ' + type;
+        }
+
+        function generateToken() {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let result = '';
+            const arr = new Uint8Array(32);
+            crypto.getRandomValues(arr);
+            arr.forEach(b => result += chars[b % chars.length]);
+            document.getElementById('newToken').value = result;
+            showMsg('tokenMsg', '已生成随机Token，请点击「保存 Token」使其生效', 'success');
+        }
+
+        async function changePassword() {
+            const oldPwd = document.getElementById('oldPassword').value;
+            const newPwd = document.getElementById('newPassword').value;
+            const confirmPwd = document.getElementById('confirmPassword').value;
+            if (!oldPwd || !newPwd || !confirmPwd) {
+                showMsg('passwordMsg', '请填写所有密码字段', 'error'); return;
+            }
+            if (newPwd !== confirmPwd) {
+                showMsg('passwordMsg', '两次输入的新密码不一致', 'error'); return;
+            }
+            if (newPwd.length < 6) {
+                showMsg('passwordMsg', '新密码至少需要6个字符', 'error'); return;
+            }
+            try {
+                const resp = await fetch('/api/settings/password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showMsg('passwordMsg', data.message, 'success');
+                    setTimeout(() => logout(), 1500);
+                } else {
+                    showMsg('passwordMsg', data.message || '修改失败', 'error');
+                }
+            } catch (e) {
+                showMsg('passwordMsg', '网络错误: ' + e.message, 'error');
+            }
+        }
+
+        async function changeToken() {
+            const newToken = document.getElementById('newToken').value.trim();
+            if (!newToken || newToken.length < 8) {
+                showMsg('tokenMsg', 'Token至少需要8个字符', 'error'); return;
+            }
+            try {
+                const resp = await fetch('/api/settings/token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ new_token: newToken })
+                });
+                const data = await resp.json();
+                showMsg('tokenMsg', data.message || (data.success ? '保存成功' : '保存失败'),
+                    data.success ? 'success' : 'error');
+            } catch (e) {
+                showMsg('tokenMsg', '网络错误: ' + e.message, 'error');
+            }
+        }
+
+        async function changeAddress() {
+            const serverHost = document.getElementById('serverHost').value.trim();
+            if (!serverHost) {
+                showMsg('addressMsg', '服务器地址不能为空', 'error'); return;
+            }
+            try {
+                const resp = await fetch('/api/settings/address', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ server_host: serverHost })
+                });
+                const data = await resp.json();
+                showMsg('addressMsg', data.message || (data.success ? '保存成功' : '保存失败'),
+                    data.success ? 'success' : 'error');
+            } catch (e) {
+                showMsg('addressMsg', '网络错误: ' + e.message, 'error');
+            }
+        }
+
+        // Close modal when clicking overlay background
+        document.getElementById('settingsModal').addEventListener('click', function(e) {
+            if (e.target === this) closeSettings();
+        });
     </script>
 </body>
 </html>
