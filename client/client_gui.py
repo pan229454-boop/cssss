@@ -312,30 +312,34 @@ class NATTunnelClient:
 # ============== GUI 界面 ==============
 class TunnelRow:
     """隧道配置行"""
-    def __init__(self, parent, row_idx, on_delete):
+    def __init__(self, parent, on_delete):
         self.frame = ttk.Frame(parent)
-        self.frame.grid(row=row_idx, column=0, sticky='ew', pady=2)
+        self.frame.pack(fill='x', pady=2)
 
-        ttk.Label(self.frame, text='公网端口:').grid(row=0, column=0, padx=(0, 4))
-        self.remote_port = ttk.Entry(self.frame, width=8)
-        self.remote_port.grid(row=0, column=1, padx=(0, 10))
+        ttk.Label(self.frame, text='公网端口:').pack(side='left')
+        self.remote_port = ttk.Entry(self.frame, width=7)
+        self.remote_port.pack(side='left', padx=(2, 8))
 
-        ttk.Label(self.frame, text='内网地址:').grid(row=0, column=2, padx=(0, 4))
-        self.local_addr = ttk.Entry(self.frame, width=15)
+        ttk.Label(self.frame, text='内网地址:').pack(side='left')
+        self.local_addr = ttk.Entry(self.frame, width=14)
         self.local_addr.insert(0, '127.0.0.1')
-        self.local_addr.grid(row=0, column=3, padx=(0, 10))
+        self.local_addr.pack(side='left', padx=(2, 8))
 
-        ttk.Label(self.frame, text='内网端口:').grid(row=0, column=4, padx=(0, 4))
-        self.local_port = ttk.Entry(self.frame, width=8)
-        self.local_port.grid(row=0, column=5, padx=(0, 10))
+        ttk.Label(self.frame, text='内网端口:').pack(side='left')
+        self.local_port = ttk.Entry(self.frame, width=7)
+        self.local_port.pack(side='left', padx=(2, 8))
 
-        ttk.Label(self.frame, text='协议:').grid(row=0, column=6, padx=(0, 4))
+        ttk.Label(self.frame, text='协议:').pack(side='left')
         self.protocol = ttk.Combobox(self.frame, width=5, values=['tcp', 'udp'], state='readonly')
         self.protocol.set('tcp')
-        self.protocol.grid(row=0, column=7, padx=(0, 10))
+        self.protocol.pack(side='left', padx=(2, 8))
 
-        self.del_btn = ttk.Button(self.frame, text='删除', width=4, command=on_delete)
-        self.del_btn.grid(row=0, column=8)
+        ttk.Label(self.frame, text='备注:').pack(side='left')
+        self.remark = ttk.Entry(self.frame, width=12)
+        self.remark.pack(side='left', padx=(2, 8))
+
+        self.del_btn = ttk.Button(self.frame, text='✕', width=3, command=on_delete)
+        self.del_btn.pack(side='right')
 
     def get_config(self):
         rp = self.remote_port.get().strip()
@@ -348,6 +352,7 @@ class TunnelRow:
             'local_addr': la or '127.0.0.1',
             'local_port': int(lp),
             'protocol': self.protocol.get() or 'tcp',
+            'remark': self.remark.get().strip(),
         }
 
     def destroy(self):
@@ -361,7 +366,7 @@ class NATTunnelGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title('NAT Tunnel - 内网穿透客户端')
-        self.root.geometry('680x620')
+        self.root.geometry('860x640')
         self.root.resizable(True, True)
 
         self._client = None
@@ -409,16 +414,42 @@ class NATTunnelGUI:
         self.auth_token = ttk.Entry(row2, width=25, show='*')
         self.auth_token.pack(side='left', padx=4)
 
-        # 隧道配置
-        tunnel_frame = ttk.LabelFrame(self.root, text='隧道配置（将本机/内网端口映射到公网）', padding=10)
-        tunnel_frame.pack(fill='x', padx=10, pady=5)
+        # 隧道配置（标题行含添加按钮 + 可滚动列表）
+        tunnel_outer = ttk.Frame(self.root, relief='groove', borderwidth=1)
+        tunnel_outer.pack(fill='x', padx=10, pady=5)
 
-        self.tunnels_container = ttk.Frame(tunnel_frame)
-        self.tunnels_container.pack(fill='x')
+        tunnel_title_row = ttk.Frame(tunnel_outer, padding=(8, 4, 8, 4))
+        tunnel_title_row.pack(fill='x')
+        ttk.Label(tunnel_title_row, text='隧道配置（将本机/内网端口映射到公网）',
+                  font=('', 9, 'bold')).pack(side='left')
+        ttk.Button(tunnel_title_row, text='+ 添加隧道',
+                   command=self._add_tunnel_row).pack(side='left', padx=(14, 0))
 
-        add_btn_frame = ttk.Frame(tunnel_frame)
-        add_btn_frame.pack(fill='x', pady=(5, 0))
-        ttk.Button(add_btn_frame, text='+ 添加隧道', command=self._add_tunnel_row).pack(side='left')
+        ttk.Separator(tunnel_outer, orient='horizontal').pack(fill='x')
+
+        scroll_wrapper = ttk.Frame(tunnel_outer, padding=(6, 4, 6, 6))
+        scroll_wrapper.pack(fill='both', expand=True)
+
+        _bg = ttk.Style().lookup('TFrame', 'background')
+        self._tunnels_canvas = tk.Canvas(scroll_wrapper, height=150,
+                                         highlightthickness=0, bg=_bg)
+        self._tunnels_vscroll = ttk.Scrollbar(scroll_wrapper, orient='vertical',
+                                              command=self._tunnels_canvas.yview)
+        self._tunnels_canvas.configure(yscrollcommand=self._tunnels_vscroll.set)
+        self._tunnels_vscroll.pack(side='right', fill='y')
+        self._tunnels_canvas.pack(side='left', fill='both', expand=True)
+
+        self.tunnels_container = ttk.Frame(self._tunnels_canvas)
+        self._tc_win = self._tunnels_canvas.create_window(
+            (0, 0), window=self.tunnels_container, anchor='nw')
+
+        self.tunnels_container.bind('<Configure>', self._on_tunnels_configure)
+        self._tunnels_canvas.bind('<Configure>', self._on_canvas_resize)
+        self._tunnels_canvas.bind('<MouseWheel>', self._on_mousewheel)
+        self._tunnels_canvas.bind('<Button-4>',
+                                   lambda e: self._tunnels_canvas.yview_scroll(-1, 'units'))
+        self._tunnels_canvas.bind('<Button-5>',
+                                   lambda e: self._tunnels_canvas.yview_scroll(1, 'units'))
 
         # 按钮区
         btn_frame = ttk.Frame(self.root, padding=10)
@@ -433,14 +464,17 @@ class NATTunnelGUI:
         log_frame = ttk.LabelFrame(self.root, text='运行日志', padding=5)
         log_frame.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
+        log_toolbar = ttk.Frame(log_frame)
+        log_toolbar.pack(fill='x', pady=(0, 3))
+        ttk.Button(log_toolbar, text='清空日志', command=self._clear_log).pack(side='right')
+
         self.log_text = scrolledtext.ScrolledText(log_frame, height=10, state='disabled',
                                                    font=('Consolas', 9), wrap='word')
         self.log_text.pack(fill='both', expand=True)
 
-    def _add_tunnel_row(self, remote_port='', local_addr='127.0.0.1', local_port='', protocol='tcp'):
-        idx = len(self._tunnel_rows)
-        row = TunnelRow(self.tunnels_container, idx, lambda r=None: self._del_tunnel_row(r))
-        # 用闭包绑定正确的row
+    def _add_tunnel_row(self, remote_port='', local_addr='127.0.0.1', local_port='',
+                         protocol='tcp', remark=''):
+        row = TunnelRow(self.tunnels_container, lambda r=None: self._del_tunnel_row(r))
         row.del_btn.config(command=lambda r=row: self._del_tunnel_row(r))
         if remote_port:
             row.remote_port.insert(0, str(remote_port))
@@ -450,6 +484,8 @@ class NATTunnelGUI:
         if local_port:
             row.local_port.insert(0, str(local_port))
         row.protocol.set(protocol or 'tcp')
+        if remark:
+            row.remark.insert(0, remark)
         self._tunnel_rows.append(row)
 
     def _del_tunnel_row(self, row):
@@ -500,6 +536,7 @@ class NATTunnelGUI:
                     t.get('local_addr', '127.0.0.1'),
                     t.get('local_port', ''),
                     t.get('protocol', 'tcp'),
+                    t.get('remark', ''),
                 )
             if not self._tunnel_rows:
                 self._add_tunnel_row()
@@ -507,6 +544,20 @@ class NATTunnelGUI:
         except Exception as e:
             self._log(f'加载配置失败: {e}')
             self._add_tunnel_row()
+
+    def _on_tunnels_configure(self, event=None):
+        self._tunnels_canvas.configure(scrollregion=self._tunnels_canvas.bbox('all'))
+
+    def _on_canvas_resize(self, event):
+        self._tunnels_canvas.itemconfig(self._tc_win, width=event.width)
+
+    def _on_mousewheel(self, event):
+        self._tunnels_canvas.yview_scroll(-1 * (event.delta // 120), 'units')
+
+    def _clear_log(self):
+        self.log_text.config(state='normal')
+        self.log_text.delete('1.0', 'end')
+        self.log_text.config(state='disabled')
 
     def _log(self, msg):
         timestamp = time.strftime('%H:%M:%S')
