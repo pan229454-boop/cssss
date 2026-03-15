@@ -138,6 +138,14 @@ class WebAdmin:
                 await self._api_change_token(writer, headers, body)
             elif path == '/api/settings/address' and method == 'POST':
                 await self._api_change_address(writer, headers, body)
+            elif path == '/api/vpn' and method == 'GET':
+                await self._api_get_vpn(writer, headers)
+            elif path == '/api/vpn/ikev2' and method == 'POST':
+                await self._api_set_vpn_ikev2(writer, headers, body)
+            elif path == '/api/vpn/psk' and method == 'POST':
+                await self._api_set_vpn_psk(writer, headers, body)
+            elif path == '/api/vpn/rsa' and method == 'POST':
+                await self._api_set_vpn_rsa(writer, headers, body)
             else:
                 await self._send_response(writer, 404, {'error': 'Not Found'})
 
@@ -337,6 +345,125 @@ class WebAdmin:
             await self._send_response(writer, 200, {'success': True, 'message': '服务器地址已更新'})
         else:
             await self._send_response(writer, 500, {'success': False, 'message': '保存配置失败'})
+
+    async def _api_get_vpn(self, writer, headers):
+        if not self._check_token(headers):
+            await self._send_response(writer, 401, {'error': '未授权'})
+            return
+        vpn = {
+            'server_host': self.config.get('server_host', ''),
+            'ikev2_username': self.config.get('vpn_ikev2_username', 'vpnuser'),
+            'ikev2_password': self.config.get('vpn_ikev2_password', ''),
+            'psk_secret': self.config.get('vpn_psk_secret', ''),
+            'psk_username': self.config.get('vpn_psk_username', 'vpnuser'),
+            'psk_password': self.config.get('vpn_psk_password', ''),
+            'rsa_ca_cert': self.config.get('vpn_rsa_ca_cert', '/etc/ipsec.d/cacerts/ca.crt'),
+            'rsa_client_p12': self.config.get('vpn_rsa_client_p12', '/etc/ipsec.d/private/client.p12'),
+        }
+        await self._send_response(writer, 200, vpn)
+
+    async def _api_set_vpn_ikev2(self, writer, headers, body):
+        if not self._check_token(headers):
+            await self._send_response(writer, 401, {'error': '未授权'})
+            return
+        try:
+            data = json.loads(body)
+        except Exception:
+            await self._send_response(writer, 400, {'success': False, 'message': '无效请求'})
+            return
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        if not username or not password:
+            await self._send_response(writer, 400, {'success': False, 'message': '用户名和密码不能为空'})
+            return
+        ok1 = self._update_config_field('vpn_ikev2_username', username)
+        ok2 = self._update_config_field('vpn_ikev2_password', password)
+        if ok1 and ok2:
+            self._sync_vpn_strongswan('ikev2', username, password)
+            await self._send_response(writer, 200, {'success': True, 'message': 'IKEv2/MSCHAPv2 配置已保存'})
+        else:
+            await self._send_response(writer, 500, {'success': False, 'message': '保存配置失败'})
+
+    async def _api_set_vpn_psk(self, writer, headers, body):
+        if not self._check_token(headers):
+            await self._send_response(writer, 401, {'error': '未授权'})
+            return
+        try:
+            data = json.loads(body)
+        except Exception:
+            await self._send_response(writer, 400, {'success': False, 'message': '无效请求'})
+            return
+        psk = data.get('psk_secret', '').strip()
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        if not psk or not username or not password:
+            await self._send_response(writer, 400, {'success': False, 'message': 'PSK、用户名和密码均不能为空'})
+            return
+        ok = (self._update_config_field('vpn_psk_secret', psk) and
+              self._update_config_field('vpn_psk_username', username) and
+              self._update_config_field('vpn_psk_password', password))
+        if ok:
+            self._sync_vpn_strongswan('psk', username, password, psk)
+            await self._send_response(writer, 200, {'success': True, 'message': 'IPSec PSK 配置已保存'})
+        else:
+            await self._send_response(writer, 500, {'success': False, 'message': '保存配置失败'})
+
+    async def _api_set_vpn_rsa(self, writer, headers, body):
+        if not self._check_token(headers):
+            await self._send_response(writer, 401, {'error': '未授权'})
+            return
+        try:
+            data = json.loads(body)
+        except Exception:
+            await self._send_response(writer, 400, {'success': False, 'message': '无效请求'})
+            return
+        ca_cert = data.get('ca_cert', '').strip()
+        client_p12 = data.get('client_p12', '').strip()
+        if not ca_cert:
+            await self._send_response(writer, 400, {'success': False, 'message': 'CA证书路径不能为空'})
+            return
+        ok = (self._update_config_field('vpn_rsa_ca_cert', ca_cert) and
+              self._update_config_field('vpn_rsa_client_p12', client_p12))
+        if ok:
+            await self._send_response(writer, 200, {'success': True, 'message': 'IPSec RSA 证书路径已保存'})
+        else:
+            await self._send_response(writer, 500, {'success': False, 'message': '保存配置失败'})
+
+    def _sync_vpn_strongswan(self, vpn_type, username, password, psk=None):
+        """若 StrongSwan 已安装，同步更新 ipsec.secrets"""
+        secrets_path = Path('/etc/ipsec.secrets')
+        if not secrets_path.exists():
+            return  # StrongSwan 未安装，跳过
+        try:
+            content = secrets_path.read_text(encoding='utf-8')
+            if vpn_type == 'ikev2':
+                pattern = r'^{}\s*:\s*EAP\s+".+"'.format(re.escape(username))
+                new_line = '{} : EAP "{}"'.format(username, password)
+                new_content, n = re.subn(pattern, new_line, content, flags=re.MULTILINE)
+                if n == 0:
+                    new_content = content.rstrip() + '\n{} : EAP "{}"\n'.format(username, password)
+            elif vpn_type == 'psk':
+                # Update PSK line and XAUTH user
+                psk_pattern = r'^%any\s+%any\s*:\s*PSK\s+".+"'
+                new_psk_line = '%any %any : PSK "{}"'.format(psk)
+                new_content, n = re.subn(psk_pattern, new_psk_line, content, flags=re.MULTILINE)
+                if n == 0:
+                    new_content = content.rstrip() + '\n%any %any : PSK "{}"\n'.format(psk)
+                else:
+                    new_content = new_content
+                xauth_pattern = r'^{}\s*:\s*XAUTH\s+".+"'.format(re.escape(username))
+                xauth_line = '{} : XAUTH "{}"'.format(username, password)
+                new_content2, n2 = re.subn(xauth_pattern, xauth_line, new_content, flags=re.MULTILINE)
+                if n2 == 0:
+                    new_content = new_content.rstrip() + '\n{} : XAUTH "{}"\n'.format(username, password)
+                else:
+                    new_content = new_content2
+            else:
+                return
+            secrets_path.write_text(new_content, encoding='utf-8')
+            os.system('ipsec reload secrets 2>/dev/null || true')
+        except Exception:
+            pass
 
     async def start(self):
         server = await asyncio.start_server(

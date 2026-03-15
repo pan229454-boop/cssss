@@ -25,3 +25,24 @@ heartbeat_interval: 30
 
 # 心跳超时(秒) - 超过此时间没有心跳将断开连接
 heartbeat_timeout: 90
+
+# ============================================================
+# 手机端 VPN 配置（IKEv2/IPSec 内网穿透）
+# 需先在服务器上运行 deploy/setup_vpn.sh 安装 StrongSwan
+# ============================================================
+
+# 服务器公网 IP 或域名（VPN客户端填写此地址）
+server_host: "your_server_ip"
+
+# IKEv2/IPSec MSCHAPv2 - 用户名密码认证（iOS/Android 内置支持）
+vpn_ikev2_username: "vpnuser"
+vpn_ikev2_password: "change_me_vpn_password"
+
+# IPSec PSK（Cisco IPSec / 预共享密钥）- 兼容性最广
+vpn_psk_secret: "change_me_psk_secret"
+vpn_psk_username: "vpnuser"
+vpn_psk_password: "change_me_psk_password"
+
+# IPSec RSA - 证书认证（运行 setup_vpn.sh 自动生成证书后填写路径）
+vpn_rsa_ca_cert: "/etc/ipsec.d/cacerts/ca.crt"
+vpn_rsa_client_p12: "/etc/ipsec.d/private/client.p12"

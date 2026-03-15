@@ -378,6 +378,132 @@
             border: 1px solid var(--border);
         }
         .btn-secondary:hover { background: #e4e6ea; }
+
+        /* VPN Modal */
+        .modal-wide { width: 680px; }
+
+        .vpn-info-row {
+            background: linear-gradient(135deg, #667eea22, #764ba222);
+            border: 1px solid #667eea55;
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .vpn-info-row .lbl { color: #555; font-size: 13px; white-space: nowrap; }
+        .vpn-info-row .val {
+            font-weight: 700;
+            font-size: 15px;
+            color: var(--primary);
+            flex: 1;
+        }
+
+        .vpn-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            background: #f0f2f5;
+            border-radius: 10px;
+            padding: 4px;
+        }
+        .vpn-tab {
+            flex: 1;
+            padding: 8px 4px;
+            border: none;
+            background: transparent;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+        .vpn-tab.active {
+            background: white;
+            color: var(--primary);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+        }
+        .vpn-tab:hover:not(.active) { color: var(--text); }
+
+        .vpn-panel { display: none; }
+        .vpn-panel.active { display: block; }
+
+        .vpn-param-grid {
+            display: grid;
+            grid-template-columns: 160px 1fr;
+            gap: 6px 12px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+        .vpn-param-grid .pk { color: var(--text-secondary); font-size: 13px; display: flex; align-items: center; }
+        .vpn-param-grid .pv { font-weight: 600; word-break: break-all; }
+        .vpn-param-grid .pv.copy-val {
+            cursor: pointer;
+            color: var(--primary);
+            text-decoration: underline dotted;
+        }
+        .vpn-param-grid .pv.copy-val:hover { color: var(--primary-dark); }
+
+        .vpn-edit-toggle {
+            font-size: 13px;
+            color: var(--primary);
+            cursor: pointer;
+            margin-bottom: 12px;
+            display: inline-block;
+        }
+        .vpn-edit-toggle:hover { text-decoration: underline; }
+
+        .vpn-edit-form { display: none; margin-bottom: 14px; }
+        .vpn-edit-form.open { display: block; }
+
+        .vpn-guide {
+            background: #fff8e1;
+            border: 1px solid #ffe082;
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-top: 14px;
+        }
+        .vpn-guide h4 { font-size: 13px; font-weight: 700; margin-bottom: 10px; color: #795548; }
+        .vpn-guide-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+        .vpn-guide-tab {
+            padding: 4px 12px;
+            border-radius: 20px;
+            border: 1px solid #e0e0e0;
+            background: white;
+            font-size: 12px;
+            cursor: pointer;
+            color: #555;
+        }
+        .vpn-guide-tab.active { background: #795548; color: white; border-color: #795548; }
+        .vpn-guide-content { display: none; }
+        .vpn-guide-content.active { display: block; }
+        .vpn-guide ol { padding-left: 18px; }
+        .vpn-guide li { font-size: 13px; margin-bottom: 5px; line-height: 1.6; color: #555; }
+        .vpn-guide code {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+
+        .setup-code {
+            background: #1e1e2e;
+            color: #cdd6f4;
+            border-radius: 10px;
+            padding: 16px;
+            font-size: 13px;
+            font-family: monospace;
+            overflow-x: auto;
+            margin: 10px 0;
+            white-space: pre;
+        }
     </style>
 </head>
 <body>
@@ -400,6 +526,7 @@
             <div class="nav-right">
                 <span class="refresh-info" id="refreshInfo">每5秒自动刷新</span>
                 <button class="btn btn-secondary btn-small" onclick="openSettings()">⚙️ 设置</button>
+                <button class="btn btn-secondary btn-small" onclick="openVPN()">📱 VPN配置</button>
                 <button class="btn btn-danger btn-small" onclick="logout()">退出登录</button>
             </div>
         </nav>
@@ -439,6 +566,204 @@
                 <div class="no-data">
                     <div class="icon">📡</div>
                     <p>暂无在线客户端</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- VPN Modal -->
+    <div class="modal-overlay" id="vpnModal">
+        <div class="modal-box modal-wide">
+            <button class="modal-close" onclick="closeVPN()">✕</button>
+            <h2>📱 手机端VPN配置（IKEv2/IPSec内网穿透）</h2>
+
+            <div class="vpn-info-row">
+                <span class="lbl">🌐 VPN服务器地址</span>
+                <span class="val" id="vpnHostDisplay">未设置</span>
+                <button class="btn btn-secondary btn-small" onclick="openSettings()">&#x270F; 设置</button>
+            </div>
+
+            <div class="vpn-tabs">
+                <button class="vpn-tab active" onclick="switchVpnTab('ikev2', this)">IKEv2/MSCHAPv2</button>
+                <button class="vpn-tab" onclick="switchVpnTab('psk', this)">IPSec PSK</button>
+                <button class="vpn-tab" onclick="switchVpnTab('rsa', this)">IPSec RSA</button>
+                <button class="vpn-tab" onclick="switchVpnTab('deploy', this)">🖥️ 部署指南</button>
+            </div>
+
+            <!-- IKEv2/MSCHAPv2 -->
+            <div class="vpn-panel active" id="vpnPanelIkev2">
+                <div class="vpn-param-grid">
+                    <span class="pk">连接类型</span><span class="pv">IKEv2</span>
+                    <span class="pk">服务器地址</span><span class="pv copy-val" onclick="copyText(this)" id="ikev2Host">—</span>
+                    <span class="pk">认证方式</span><span class="pv">EAP-MSCHAPv2</span>
+                    <span class="pk">用户名</span><span class="pv copy-val" onclick="copyText(this)" id="ikev2User">—</span>
+                    <span class="pk">密码</span><span class="pv copy-val" onclick="copyText(this)" id="ikev2Pass">—</span>
+                    <span class="pk">服务器证书</span><span class="pv">自签名（首次连接需信任）</span>
+                </div>
+                <span class="vpn-edit-toggle" onclick="toggleEditForm('editIkev2')">✏️ 修改用户名/密码</span>
+                <div class="vpn-edit-form settings-section" id="editIkev2">
+                    <div class="field-group"><label>用户名</label><input type="text" id="ikev2Username" placeholder="VPN用户名"></div>
+                    <div class="field-group"><label>密码</label><input type="text" id="ikev2Password" placeholder="VPN密码"></div>
+                    <button class="btn btn-primary" style="width:100%" onclick="saveIkev2()">&#x1F4BE; 保存</button>
+                    <div class="settings-msg" id="ikev2Msg"></div>
+                </div>
+                <div class="vpn-guide">
+                    <h4>📱 手机配置方法（点击参数可复制）</h4>
+                    <div class="vpn-guide-tabs">
+                        <button class="vpn-guide-tab active" onclick="switchGuideTab('ikev2ios',this)">👀 iOS/iPadOS</button>
+                        <button class="vpn-guide-tab" onclick="switchGuideTab('ikev2android',this)">🤖 Android</button>
+                    </div>
+                    <div class="vpn-guide-content active" id="g-ikev2ios">
+                        <ol>
+                            <li>设置 &gt; 通用 &gt; <strong>VPN</u> &gt; 添加VPN配置</strong></li>
+                            <li>类型选择：<code>IKEv2</code></li>
+                            <li>描述：随意填，如 <code>NAT内网穿透</code></li>
+                            <li>服务器：填写上方「服务器地址」</li>
+                            <li>远程 ID：同服务器地址</li>
+                            <li>用户认证：选 <code>用户名</code></li>
+                            <li>用户名 / 密码：填写上方配置的用户名和密码</li>
+                            <li>保存后开启 VPN 即可</li>
+                        </ol>
+                    </div>
+                    <div class="vpn-guide-content" id="g-ikev2android">
+                        <ol>
+                            <li>设置 &gt; 网络 &gt; <strong>VPN</strong> &gt; 添加</li>
+                            <li>类型选择：<code>IKEv2/IPSec MSCHAPv2</code></li>
+                            <li>服务器地址：填写上方「服务器地址」</li>
+                            <li>用户名 / 密码：填写上方配置的用户名和密码</li>
+                            <li>不需要客户端证书和CA证书</li>
+                            <li>保存后连接即可</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+
+            <!-- IPSec PSK -->
+            <div class="vpn-panel" id="vpnPanelPsk">
+                <div class="vpn-param-grid">
+                    <span class="pk">连接类型</span><span class="pv">Cisco IPSec</span>
+                    <span class="pk">服务器地址</span><span class="pv copy-val" onclick="copyText(this)" id="pskHost">—</span>
+                    <span class="pk">预共享密钥</span><span class="pv copy-val" onclick="copyText(this)" id="pskSecret">—</span>
+                    <span class="pk">账户</span><span class="pv copy-val" onclick="copyText(this)" id="pskUser">—</span>
+                    <span class="pk">密码</span><span class="pv copy-val" onclick="copyText(this)" id="pskPass">—</span>
+                </div>
+                <span class="vpn-edit-toggle" onclick="toggleEditForm('editPsk')">✏️ 修改PSK配置</span>
+                <div class="vpn-edit-form settings-section" id="editPsk">
+                    <div class="field-group"><label>预共享密钥 (PSK)</label><input type="text" id="pskSecretInput" placeholder="IPSec预共享密钥"></div>
+                    <div class="field-group"><label>用户名</label><input type="text" id="pskUsername" placeholder="XAuth用户名"></div>
+                    <div class="field-group"><label>密码</label><input type="text" id="pskPassword" placeholder="XAuth密码"></div>
+                    <button class="btn btn-primary" style="width:100%" onclick="savePsk()">💾 保存</button>
+                    <div class="settings-msg" id="pskMsg"></div>
+                </div>
+                <div class="vpn-guide">
+                    <h4>📱 手机配置方法（点击参数可复制）</h4>
+                    <div class="vpn-guide-tabs">
+                        <button class="vpn-guide-tab active" onclick="switchGuideTab('pskios',this)">👀 iOS/iPadOS</button>
+                        <button class="vpn-guide-tab" onclick="switchGuideTab('pskandroid',this)">🤖 Android</button>
+                        <button class="vpn-guide-tab" onclick="switchGuideTab('pskwin',this)">💻 Windows</button>
+                    </div>
+                    <div class="vpn-guide-content active" id="g-pskios">
+                        <ol>
+                            <li>设置 &gt; 通用 &gt; VPN &gt; 添加VPN配置</li>
+                            <li>类型选择：<code>IPSec</code></li>
+                            <li>服务器：填写上方「服务器地址」</li>
+                            <li>账户 / 密码：填写上方配置的用户名和密码</li>
+                            <li>局部标识：留空</li>
+                            <li>共享密钥：填写上方「预共享密钥」</li>
+                            <li>保存后连接</li>
+                        </ol>
+                    </div>
+                    <div class="vpn-guide-content" id="g-pskandroid">
+                        <ol>
+                            <li>设置 &gt; 网络 &gt; VPN &gt; 添加</li>
+                            <li>类型选择：<code>IPSec Xauth PSK</code></li>
+                            <li>服务器地址：填写上方「服务器地址」</li>
+                            <li>IPSec预共享密钥：填写上方「预共享密钥」</li>
+                            <li>用户名 / 密码：填写上方账户和密码</li>
+                            <li>保存后连接</li>
+                        </ol>
+                    </div>
+                    <div class="vpn-guide-content" id="g-pskwin">
+                        <ol>
+                            <li>控制面板 &gt; 网络 &gt; VPN &gt; 添加VPN连接</li>
+                            <li>VPN提供商：<code>L2TP/IPsec 预共享密钥</code></li>
+                            <li>服务器名称：填写服务器地址</li>
+                            <li>预共享密钥：填写上方PSK</li>
+                            <li>用户名/密码：填写上方账户和密码</li>
+                            <li>保存后连接</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+
+            <!-- IPSec RSA -->
+            <div class="vpn-panel" id="vpnPanelRsa">
+                <div class="vpn-param-grid">
+                    <span class="pk">连接类型</span><span class="pv">IKEv2 证书认证</span>
+                    <span class="pk">服务器地址</span><span class="pv copy-val" onclick="copyText(this)" id="rsaHost">—</span>
+                    <span class="pk">CA证书路径</span><span class="pv copy-val" onclick="copyText(this)" id="rsaCaCert">—</span>
+                    <span class="pk">客户端 P12</span><span class="pv copy-val" onclick="copyText(this)" id="rsaClientP12">—</span>
+                </div>
+                <p style="font-size:13px;color:#666;margin-bottom:12px">💡 需先在服务器执行 <code>setup_vpn.sh</code> 自动生成 CA 和密钥对，再将客户端 P12 文件传输到手机安装。</p>
+                <span class="vpn-edit-toggle" onclick="toggleEditForm('editRsa')">✏️ 修改证书路径</span>
+                <div class="vpn-edit-form settings-section" id="editRsa">
+                    <div class="field-group"><label>CA 证书路径</label><input type="text" id="rsaCaCertInput" placeholder="/etc/ipsec.d/cacerts/ca.crt"></div>
+                    <div class="field-group"><label>客户端 P12 路径</label><input type="text" id="rsaClientP12Input" placeholder="/etc/ipsec.d/private/client.p12"></div>
+                    <button class="btn btn-primary" style="width:100%" onclick="saveRsa()">💾 保存</button>
+                    <div class="settings-msg" id="rsaMsg"></div>
+                </div>
+                <div class="vpn-guide">
+                    <h4>📱 手机安装步骤</h4>
+                    <div class="vpn-guide-tabs">
+                        <button class="vpn-guide-tab active" onclick="switchGuideTab('rsaios',this)">👀 iOS/iPadOS</button>
+                        <button class="vpn-guide-tab" onclick="switchGuideTab('rsaandroid',this)">🤖 Android</button>
+                    </div>
+                    <div class="vpn-guide-content active" id="g-rsaios">
+                        <ol>
+                            <li>先传输服务器上的 <code>client.p12</code> 和 <code>ca.crt</code> 到 iPhone</li>
+                            <li>点击 <code>ca.crt</code> 安装证书，按提示信任</li>
+                            <li>设置 &gt; 通用 &gt; 关于本机 &gt; 证书信任设置 &gt; 开启 CA 证书完全信任</li>
+                            <li>点击 <code>client.p12</code> 安装，输入 P12 密码（默认 <code>1234</code>）</li>
+                            <li>设置 &gt; 通用 &gt; VPN &gt; 添加 &gt; 类型 <code>IKEv2</code></li>
+                            <li>服务器/远程 ID：填写服务器地址</li>
+                            <li>用户认证选 <code>证书</code>，选择小钔建的客户端证书</li>
+                        </ol>
+                    </div>
+                    <div class="vpn-guide-content" id="g-rsaandroid">
+                        <ol>
+                            <li>将 <code>client.p12</code> 和 <code>ca.crt</code> 传输到 Android</li>
+                            <li>设置 &gt; 安全 &gt; 安装证书，分别安装 CA 和 P12</li>
+                            <li>设置 &gt; 网络 &gt; VPN &gt; 添加</li>
+                            <li>类型选择：<code>IKEv2/IPSec RSA</code></li>
+                            <li>服务器地址：填写服务器地址</li>
+                            <li>选择已安装的客户端证书和 CA</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Deploy Guide -->
+            <div class="vpn-panel" id="vpnPanelDeploy">
+                <p style="font-size:14px;color:#555;margin-bottom:14px">在公网服务器上运行以下命令安装并配置全部三种类型的 IPSec VPN：</p>
+                <div class="setup-code"># 1. 下载部署脚本
+bash &lt;(curl -fsSL https://你的服务器/deploy/setup_vpn.sh)
+
+# 或手动运行
+bash deploy/setup_vpn.sh</div>
+                <div class="settings-section">
+                    <h3>📌 脑装 setup_vpn.sh 功能</h3>
+                    <ul style="font-size:14px;color:#555;line-height:2;padding-left:20px">
+                        <li>自动安装 StrongSwan（支持 Ubuntu/Debian/CentOS）</li>
+                        <li>生成 CA 根证书、服务器证书、客户端 P12</li>
+                        <li>配置 IKEv2+MSCHAPv2、IPSec PSK、IPSec RSA 三种连接</li>
+                        <li>自动开启 IP 转发和 NAT 防火墙规则</li>
+                        <li>配置完成后输出所有连接参数</li>
+                    </ul>
+                </div>
+                <div class="settings-section">
+                    <h3>🔧 部署后更新VPN凭据</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:10px">安装完成后，返回本页对应类型的「修改」按鈕，将 setup_vpn.sh 输出的凭据填入并保存即可。</p>
+                    <p style="font-size:13px;color:#666">客户端 P12 证书和 CA 证书需多下载和传输到手机，详见「IPSec RSA」页签内的指南。</p>
                 </div>
             </div>
         </div>
@@ -840,6 +1165,136 @@
         document.getElementById('settingsModal').addEventListener('click', function(e) {
             if (e.target === this) closeSettings();
         });
+
+        // ========= VPN =========
+        async function openVPN() {
+            document.getElementById('vpnModal').classList.add('active');
+            try {
+                const resp = await fetch('/api/vpn', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (resp.ok) {
+                    const d = await resp.json();
+                    const host = d.server_host || '未设置';
+                    document.getElementById('vpnHostDisplay').textContent = host;
+                    document.getElementById('ikev2Host').textContent = host;
+                    document.getElementById('ikev2User').textContent = d.ikev2_username || '';
+                    document.getElementById('ikev2Pass').textContent = d.ikev2_password || '';
+                    document.getElementById('pskHost').textContent = host;
+                    document.getElementById('pskSecret').textContent = d.psk_secret || '';
+                    document.getElementById('pskUser').textContent = d.psk_username || '';
+                    document.getElementById('pskPass').textContent = d.psk_password || '';
+                    document.getElementById('rsaHost').textContent = host;
+                    document.getElementById('rsaCaCert').textContent = d.rsa_ca_cert || '';
+                    document.getElementById('rsaClientP12').textContent = d.rsa_client_p12 || '';
+                    // Pre-fill edit forms
+                    document.getElementById('ikev2Username').value = d.ikev2_username || '';
+                    document.getElementById('ikev2Password').value = d.ikev2_password || '';
+                    document.getElementById('pskSecretInput').value = d.psk_secret || '';
+                    document.getElementById('pskUsername').value = d.psk_username || '';
+                    document.getElementById('pskPassword').value = d.psk_password || '';
+                    document.getElementById('rsaCaCertInput').value = d.rsa_ca_cert || '';
+                    document.getElementById('rsaClientP12Input').value = d.rsa_client_p12 || '';
+                }
+            } catch(e) {}
+        }
+
+        function closeVPN() {
+            document.getElementById('vpnModal').classList.remove('active');
+        }
+
+        document.getElementById('vpnModal').addEventListener('click', function(e) {
+            if (e.target === this) closeVPN();
+        });
+
+        function switchVpnTab(tab, btn) {
+            document.querySelectorAll('.vpn-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.vpn-panel').forEach(p => p.classList.remove('active'));
+            btn.classList.add('active');
+            const map = { ikev2: 'vpnPanelIkev2', psk: 'vpnPanelPsk', rsa: 'vpnPanelRsa', deploy: 'vpnPanelDeploy' };
+            document.getElementById(map[tab]).classList.add('active');
+        }
+
+        function switchGuideTab(id, btn) {
+            const parent = btn.closest('.vpn-guide');
+            parent.querySelectorAll('.vpn-guide-tab').forEach(t => t.classList.remove('active'));
+            parent.querySelectorAll('.vpn-guide-content').forEach(c => c.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('g-' + id).classList.add('active');
+        }
+
+        function toggleEditForm(id) {
+            const el = document.getElementById(id);
+            el.classList.toggle('open');
+        }
+
+        function copyText(el) {
+            const text = el.textContent;
+            if (!text || text === '—') return;
+            navigator.clipboard.writeText(text).then(() => {
+                const orig = el.style.textDecoration;
+                el.style.color = 'var(--success)';
+                setTimeout(() => { el.style.color = ''; }, 1000);
+            }).catch(() => {
+                prompt('复制以下内容：', text);
+            });
+        }
+
+        async function saveIkev2() {
+            const username = document.getElementById('ikev2Username').value.trim();
+            const password = document.getElementById('ikev2Password').value.trim();
+            if (!username || !password) { showMsg('ikev2Msg', '请填写用户名和密码', 'error'); return; }
+            try {
+                const resp = await fetch('/api/vpn/ikev2', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await resp.json();
+                showMsg('ikev2Msg', data.message || (data.success ? '保存成功' : '失败'), data.success ? 'success' : 'error');
+                if (data.success) { document.getElementById('ikev2User').textContent = username; document.getElementById('ikev2Pass').textContent = password; }
+            } catch(e) { showMsg('ikev2Msg', '网络错误', 'error'); }
+        }
+
+        async function savePsk() {
+            const psk_secret = document.getElementById('pskSecretInput').value.trim();
+            const username = document.getElementById('pskUsername').value.trim();
+            const password = document.getElementById('pskPassword').value.trim();
+            if (!psk_secret || !username || !password) { showMsg('pskMsg', '所有字段均不能为空', 'error'); return; }
+            try {
+                const resp = await fetch('/api/vpn/psk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ psk_secret, username, password })
+                });
+                const data = await resp.json();
+                showMsg('pskMsg', data.message || (data.success ? '保存成功' : '失败'), data.success ? 'success' : 'error');
+                if (data.success) {
+                    document.getElementById('pskSecret').textContent = psk_secret;
+                    document.getElementById('pskUser').textContent = username;
+                    document.getElementById('pskPass').textContent = password;
+                }
+            } catch(e) { showMsg('pskMsg', '网络错误', 'error'); }
+        }
+
+        async function saveRsa() {
+            const ca_cert = document.getElementById('rsaCaCertInput').value.trim();
+            const client_p12 = document.getElementById('rsaClientP12Input').value.trim();
+            if (!ca_cert) { showMsg('rsaMsg', 'CA证书路径不能为空', 'error'); return; }
+            try {
+                const resp = await fetch('/api/vpn/rsa', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ ca_cert, client_p12 })
+                });
+                const data = await resp.json();
+                showMsg('rsaMsg', data.message || (data.success ? '保存成功' : '失败'), data.success ? 'success' : 'error');
+                if (data.success) {
+                    document.getElementById('rsaCaCert').textContent = ca_cert;
+                    document.getElementById('rsaClientP12').textContent = client_p12;
+                }
+            } catch(e) { showMsg('rsaMsg', '网络错误', 'error'); }
+        }
     </script>
 </body>
 </html>
