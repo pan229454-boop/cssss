@@ -114,33 +114,47 @@ if [ "$SW_CONF" != "/etc" ]; then
 fi
 info "配置目录: $SW_CONF"
 
+# ── 全部用 openssl 生成证书，兼容所有发行版 ──
+
 # CA 私钥 + 证书
 if [ ! -f "$CERT_DIR/private/ca.key.pem" ]; then
-    ipsec pki --gen --type rsa --size 4096 \
-        --outform pem > "$CERT_DIR/private/ca.key.pem"
+    openssl genrsa -out "$CERT_DIR/private/ca.key.pem" 4096 2>/dev/null
     chmod 600 "$CERT_DIR/private/ca.key.pem"
-    ipsec pki --self --ca --lifetime 3650 \
-        --in "$CERT_DIR/private/ca.key.pem" --type rsa \
-        --dn "CN=NAT Tunnel CA" \
-        --outform pem > "$CERT_DIR/cacerts/ca.crt"
+    openssl req -x509 -new -nodes \
+        -key "$CERT_DIR/private/ca.key.pem" \
+        -sha256 -days 3650 \
+        -out "$CERT_DIR/cacerts/ca.crt" \
+        -subj "/CN=NAT Tunnel CA"
     info "CA 根证书已生成: $CERT_DIR/cacerts/ca.crt"
 else
     info "CA 根证书已存在，跳过生成"
 fi
 
-# 服务器私钥 + 证书
+# 服务器私钥 + 证书（含 SAN + serverAuth + ikeIntermediate OID）
 if [ ! -f "$CERT_DIR/private/server.key.pem" ]; then
-    ipsec pki --gen --type rsa --size 2048 \
-        --outform pem > "$CERT_DIR/private/server.key.pem"
+    openssl genrsa -out "$CERT_DIR/private/server.key.pem" 2048 2>/dev/null
     chmod 600 "$CERT_DIR/private/server.key.pem"
-    ipsec pki --pub --in "$CERT_DIR/private/server.key.pem" --type rsa \
-        | ipsec pki --issue --lifetime 1825 \
-            --cacert "$CERT_DIR/cacerts/ca.crt" \
-            --cakey  "$CERT_DIR/private/ca.key.pem" \
-            --dn "CN=$VPN_SERVER_IP" \
-            --san "$VPN_SERVER_IP" \
-            --flag serverAuth --flag ikeIntermediate \
-            --outform pem > "$CERT_DIR/certs/server.crt"
+    cat > /tmp/server_ext.cnf << EXTEOF
+[req]
+distinguished_name = dn
+[dn]
+[v3_req]
+subjectAltName = IP:${VPN_SERVER_IP}
+extendedKeyUsage = serverAuth,1.3.6.1.4.1.40808.1.3.2
+basicConstraints = CA:FALSE
+EXTEOF
+    openssl req -new \
+        -key "$CERT_DIR/private/server.key.pem" \
+        -subj "/CN=$VPN_SERVER_IP" \
+        -out /tmp/server.csr 2>/dev/null
+    openssl x509 -req \
+        -in /tmp/server.csr \
+        -CA "$CERT_DIR/cacerts/ca.crt" \
+        -CAkey "$CERT_DIR/private/ca.key.pem" \
+        -CAcreateserial -days 1825 \
+        -extfile /tmp/server_ext.cnf -extensions v3_req \
+        -out "$CERT_DIR/certs/server.crt" 2>/dev/null
+    rm -f /tmp/server.csr /tmp/server_ext.cnf
     info "服务器证书已生成: $CERT_DIR/certs/server.crt"
 else
     info "服务器证书已存在，跳过生成"
@@ -148,15 +162,19 @@ fi
 
 # 客户端证书 (用于 RSA 认证)
 if [ ! -f "$CERT_DIR/private/client.key.pem" ]; then
-    ipsec pki --gen --type rsa --size 2048 \
-        --outform pem > "$CERT_DIR/private/client.key.pem"
+    openssl genrsa -out "$CERT_DIR/private/client.key.pem" 2048 2>/dev/null
     chmod 600 "$CERT_DIR/private/client.key.pem"
-    ipsec pki --pub --in "$CERT_DIR/private/client.key.pem" --type rsa \
-        | ipsec pki --issue --lifetime 1825 \
-            --cacert "$CERT_DIR/cacerts/ca.crt" \
-            --cakey  "$CERT_DIR/private/ca.key.pem" \
-            --dn "CN=vpn-client" \
-            --outform pem > "$CERT_DIR/certs/client.crt"
+    openssl req -new \
+        -key "$CERT_DIR/private/client.key.pem" \
+        -subj "/CN=vpn-client" \
+        -out /tmp/client.csr 2>/dev/null
+    openssl x509 -req \
+        -in /tmp/client.csr \
+        -CA "$CERT_DIR/cacerts/ca.crt" \
+        -CAkey "$CERT_DIR/private/ca.key.pem" \
+        -CAcreateserial -days 1825 \
+        -out "$CERT_DIR/certs/client.crt" 2>/dev/null
+    rm -f /tmp/client.csr
     # 打包为 P12（手机安装用）
     openssl pkcs12 -export \
         -in  "$CERT_DIR/certs/client.crt" \
@@ -164,7 +182,7 @@ if [ ! -f "$CERT_DIR/private/client.key.pem" ]; then
         -certfile "$CERT_DIR/cacerts/ca.crt" \
         -name "vpn-client" \
         -passout "pass:$P12_PASSWORD" \
-        -out "$CERT_DIR/p12/client.p12"
+        -out "$CERT_DIR/p12/client.p12" 2>/dev/null
     info "客户端证书 P12 已生成: $CERT_DIR/p12/client.p12  (密码: $P12_PASSWORD)"
 else
     info "客户端证书已存在，跳过生成"
