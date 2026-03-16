@@ -166,15 +166,17 @@ conn %default
     ikelifetime=60m
     keylife=20m
     rekeymargin=3m
-    keyingtries=1
+    keyingtries=3
     dpdaction=clear
     dpddelay=300s
 
 # ── IKEv2 + EAP-MSCHAPv2 (用户名/密码认证) ────
+# 手机端「IPSec标识符」填写：$VPN_SERVER_IP
 conn ikev2-eap-mschapv2
     keyexchange=ikev2
-    ike=aes256gcm16-sha256-ecp256,aes256-sha256-modp2048!
-    esp=aes256gcm16-sha256,aes256-sha256!
+    # 宽泛密码套件，兼容 iOS 16+/Android 10+ 及各品牌手机
+    ike=aes256gcm16-sha256-ecp256,aes256gcm16-sha256-modp2048,aes256-sha256-modp2048,aes256-sha256-ecp256,aes128gcm16-sha256-modp2048,aes128-sha256-modp2048
+    esp=aes256gcm16-sha256,aes256-sha256,aes128gcm16-sha256,aes128-sha256
     left=%any
     leftid=$VPN_SERVER_IP
     leftauth=pubkey
@@ -185,14 +187,17 @@ conn ikev2-eap-mschapv2
     rightauth=eap-mschapv2
     rightsourceip=$VPN_CLIENT_IP_POOL_IKEV2
     rightdns=$DNS1,$DNS2
-    eap_identity=%identity
+    eap_identity=%any
+    reauth=no
+    fragmentation=yes
+    compress=no
     auto=add
 
 # ── IPSec PSK / Cisco IPSec (IKEv1 + XAuth) ──
 conn ipsec-psk
     keyexchange=ikev1
-    ike=aes256-sha256-modp2048,aes128-sha1-modp2048!
-    esp=aes256-sha256,aes128-sha1!
+    ike=aes256-sha256-modp2048,aes256-sha1-modp2048,aes128-sha256-modp2048,aes128-sha1-modp2048
+    esp=aes256-sha256,aes256-sha1,aes128-sha256,aes128-sha1
     left=%any
     leftauth=psk
     leftsubnet=0.0.0.0/0
@@ -202,13 +207,14 @@ conn ipsec-psk
     rightsourceip=$VPN_CLIENT_IP_POOL_PSK
     rightdns=$DNS1,$DNS2
     xauth=server
+    fragmentation=yes
     auto=add
 
 # ── IKEv2 + RSA 证书认证 ──────────────────────
 conn ikev2-rsa
     keyexchange=ikev2
-    ike=aes256gcm16-sha256-ecp256,aes256-sha256-modp2048!
-    esp=aes256gcm16-sha256,aes256-sha256!
+    ike=aes256gcm16-sha256-ecp256,aes256gcm16-sha256-modp2048,aes256-sha256-modp2048,aes128gcm16-sha256-modp2048,aes128-sha256-modp2048
+    esp=aes256gcm16-sha256,aes256-sha256,aes128gcm16-sha256,aes128-sha256
     left=%any
     leftid=$VPN_SERVER_IP
     leftauth=pubkey
@@ -219,6 +225,7 @@ conn ikev2-rsa
     rightauth=pubkey
     rightsourceip=$VPN_CLIENT_IP_POOL_RSA
     rightdns=$DNS1,$DNS2
+    fragmentation=yes
     auto=add
 EOF
 info "ipsec.conf 已写入"
@@ -244,7 +251,20 @@ EOF
 chmod 600 /etc/ipsec.secrets
 info "ipsec.secrets 已写入"
 
-# ── 开启 IP 转发 ──────────────────────────────
+# ── 配置 charon EAP-MSCHAPv2 插件 ─────────────
+step "配置 StrongSwan charon 插件..."
+mkdir -p /etc/strongswan.d/charon
+# 确保 EAP-MSCHAPv2 和 EAP-Identity 插件加载
+for plugin in eap-mschapv2 eap-identity; do
+    conf_file="/etc/strongswan.d/charon/${plugin}.conf"
+    if [ ! -f "$conf_file" ]; then
+        echo -e "${plugin} {\n    load = yes\n}" > "$conf_file"
+    else
+        # 确保 load = yes
+        sed -i 's/load = no/load = yes/g' "$conf_file" 2>/dev/null || true
+    fi
+done
+info "charon 插件配置完成"
 step "开启 IP 转发..."
 sed -i '/^#\?net\.ipv4\.ip_forward/d' /etc/sysctl.conf
 echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
@@ -316,12 +336,14 @@ echo -e "${GREEN}  VPN 部署完成！以下是手机端连接参数${NC}"
 echo "══════════════════════════════════════════════════"
 echo ""
 echo -e "${BLUE}▶ 方式一：IKEv2/IPSec MSCHAPv2（推荐）${NC}"
+echo "   连接类型   : IKEv2/IPSec MSCHAPv2"
 echo "   服务器地址 : $VPN_SERVER_IP"
-echo "   连接类型   : IKEv2"
-echo "   认证方式   : 用户名/密码 (EAP-MSCHAPv2)"
+echo "   IPSec标识符: $VPN_SERVER_IP  ← 手机此字段必须填写"
 echo "   用户名     : $IKEV2_USERNAME"
 echo "   密码       : $IKEV2_PASSWORD"
-echo "   服务器证书 : 自签名（首次连接需信任）"
+echo "   IPSec CA证书: 不验证服务器（或留空）"
+echo "   IPSec服务器证书: 来自服务器"
+echo "   本地ID     : 留空"
 echo ""
 echo -e "${BLUE}▶ 方式二：IPSec PSK / Cisco IPSec${NC}"
 echo "   服务器地址 : $VPN_SERVER_IP"

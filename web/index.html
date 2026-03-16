@@ -593,12 +593,14 @@
             <!-- IKEv2/MSCHAPv2 -->
             <div class="vpn-panel active" id="vpnPanelIkev2">
                 <div class="vpn-param-grid">
-                    <span class="pk">连接类型</span><span class="pv">IKEv2</span>
+                    <span class="pk">名称（随意）</span><span class="pv">NAT内网穿透</span>
+                    <span class="pk">类型</span><span class="pv">IKEv2/IPSec MSCHAPv2</span>
                     <span class="pk">服务器地址</span><span class="pv copy-val" onclick="copyText(this)" id="ikev2Host">—</span>
-                    <span class="pk">认证方式</span><span class="pv">EAP-MSCHAPv2</span>
+                    <span class="pk" style="color:#e05;font-weight:600">IPSec 标识符 ★</span><span class="pv copy-val" onclick="copyText(this)" id="ikev2Identifier" style="color:#e05">—</span>
+                    <span class="pk">IPSec CA 证书</span><span class="pv">选「不验证服务器」</span>
+                    <span class="pk">IPSec 服务器证书</span><span class="pv">来自服务器</span>
                     <span class="pk">用户名</span><span class="pv copy-val" onclick="copyText(this)" id="ikev2User">—</span>
                     <span class="pk">密码</span><span class="pv copy-val" onclick="copyText(this)" id="ikev2Pass">—</span>
-                    <span class="pk">服务器证书</span><span class="pv">自签名（首次连接需信任）</span>
                 </div>
                 <span class="vpn-edit-toggle" onclick="toggleEditForm('editIkev2')">✏️ 修改用户名/密码</span>
                 <div class="vpn-edit-form settings-section" id="editIkev2">
@@ -614,24 +616,31 @@
                         <button class="vpn-guide-tab" onclick="switchGuideTab('ikev2android',this)">🤖 Android</button>
                     </div>
                     <div class="vpn-guide-content active" id="g-ikev2ios">
+                        <p style="color:#c00;font-size:12px;margin:0 0 6px">⚠️ 必须填写「远程ID」，否则连接失败</p>
                         <ol>
-                            <li>设置 &gt; 通用 &gt; <strong>VPN</u> &gt; 添加VPN配置</strong></li>
+                            <li>设置 &gt; 通用 &gt; <strong>VPN与设备管理</strong> &gt; VPN &gt; 添加VPN配置</li>
                             <li>类型选择：<code>IKEv2</code></li>
-                            <li>描述：随意填，如 <code>NAT内网穿透</code></li>
+                            <li>描述：随意，如 <code>NAT内网穿透</code></li>
                             <li>服务器：填写上方「服务器地址」</li>
-                            <li>远程 ID：同服务器地址</li>
+                            <li><strong>远程ID</strong>：填写上方「IPSec 标识符」（与服务器地址相同）</li>
+                            <li>本地ID：<strong>留空</strong></li>
                             <li>用户认证：选 <code>用户名</code></li>
                             <li>用户名 / 密码：填写上方配置的用户名和密码</li>
-                            <li>保存后开启 VPN 即可</li>
+                            <li>保存后开启 VPN</li>
                         </ol>
                     </div>
                     <div class="vpn-guide-content" id="g-ikev2android">
+                        <p style="color:#c00;font-size:12px;margin:0 0 6px">⚠️「IPSec标识符」是必填项，填写服务器 IP/域名</p>
                         <ol>
                             <li>设置 &gt; 网络 &gt; <strong>VPN</strong> &gt; 添加</li>
                             <li>类型选择：<code>IKEv2/IPSec MSCHAPv2</code></li>
+                            <li>名称：随意</li>
                             <li>服务器地址：填写上方「服务器地址」</li>
-                            <li>用户名 / 密码：填写上方配置的用户名和密码</li>
-                            <li>不需要客户端证书和CA证书</li>
+                            <li><strong>IPSec 标识符</strong>：填写上方红色「IPSec 标识符」</li>
+                            <li>IPSec CA 证书：选 <code>不验证服务器</code></li>
+                            <li>IPSec 服务器证书：选 <code>来自服务器</code></li>
+                            <li>用户名 / 密码：填写上方配置</li>
+                            <li>本地 ID / IPSec 用户证书：<strong>留空</strong></li>
                             <li>保存后连接即可</li>
                         </ol>
                     </div>
@@ -1183,6 +1192,7 @@ bash deploy/setup_vpn.sh</div>
                     const host = d.server_host || '未设置';
                     document.getElementById('vpnHostDisplay').textContent = host;
                     document.getElementById('ikev2Host').textContent = host;
+                    document.getElementById('ikev2Identifier').textContent = d.ikev2_identifier || host;
                     document.getElementById('ikev2User').textContent = d.ikev2_username || '';
                     document.getElementById('ikev2Pass').textContent = d.ikev2_password || '';
                     document.getElementById('pskHost').textContent = host;

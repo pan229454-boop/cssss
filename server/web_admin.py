@@ -352,6 +352,7 @@ class WebAdmin:
             return
         vpn = {
             'server_host': self.config.get('server_host', ''),
+            'ikev2_identifier': self.config.get('server_host', ''),  # 手机端"IPSec标识符"填此值
             'ikev2_username': self.config.get('vpn_ikev2_username', 'vpnuser'),
             'ikev2_password': self.config.get('vpn_ikev2_password', ''),
             'psk_secret': self.config.get('vpn_psk_secret', ''),
