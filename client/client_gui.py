@@ -16,6 +16,22 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 from pathlib import Path
 
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    HAS_TRAY = True
+except ImportError:
+    HAS_TRAY = False
+
+if sys.platform == 'win32':
+    try:
+        import winreg
+        HAS_WINREG = True
+    except ImportError:
+        HAS_WINREG = False
+else:
+    HAS_WINREG = False
+
 # ============== 协议部分（与服务端一致）==============
 PROTO_VERSION = 1
 MSG_AUTH = 0x01
@@ -374,6 +390,12 @@ class NATTunnelGUI:
         self._thread = None
         self._connected = False
         self._tunnel_rows = []
+        self._tray_icon = None
+
+        # 复选框变量（须在 build_ui 前创建）
+        self.var_minimize_tray = tk.BooleanVar(value=False)
+        self.var_autostart = tk.BooleanVar(value=False)
+        self.var_auto_connect = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._load_config()
@@ -458,7 +480,23 @@ class NATTunnelGUI:
         self.connect_btn = ttk.Button(btn_frame, text='连接', command=self._toggle_connection)
         self.connect_btn.pack(side='left', padx=(0, 10))
 
-        ttk.Button(btn_frame, text='保存配置', command=self._save_config).pack(side='left')
+        ttk.Button(btn_frame, text='保存配置', command=self._save_config).pack(side='left', padx=(0, 20))
+
+        _tray_cb = ttk.Checkbutton(btn_frame, text='最小化到托盘',
+                                    variable=self.var_minimize_tray)
+        _tray_cb.pack(side='left', padx=(0, 12))
+        if not HAS_TRAY:
+            _tray_cb.config(state='disabled')
+
+        _boot_cb = ttk.Checkbutton(btn_frame, text='开机自启',
+                                    variable=self.var_autostart,
+                                    command=self._on_autostart_toggle)
+        _boot_cb.pack(side='left', padx=(0, 12))
+        if not HAS_WINREG:
+            _boot_cb.config(state='disabled')
+
+        ttk.Checkbutton(btn_frame, text='自动连接',
+                        variable=self.var_auto_connect).pack(side='left')
 
         # 日志区
         log_frame = ttk.LabelFrame(self.root, text='运行日志', padding=5)
@@ -510,6 +548,9 @@ class NATTunnelGUI:
 
     def _save_config(self):
         config = self._get_config()
+        config['minimize_to_tray'] = self.var_minimize_tray.get()
+        config['autostart'] = self.var_autostart.get()
+        config['auto_connect'] = self.var_auto_connect.get()
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
@@ -540,10 +581,130 @@ class NATTunnelGUI:
                 )
             if not self._tunnel_rows:
                 self._add_tunnel_row()
+            self.var_minimize_tray.set(config.get('minimize_to_tray', False))
+            self.var_autostart.set(config.get('autostart', False))
+            self.var_auto_connect.set(config.get('auto_connect', False))
             self._log('配置已加载')
         except Exception as e:
             self._log(f'加载配置失败: {e}')
             self._add_tunnel_row()
+
+    # ---- 系统托盘 ----
+
+    def _create_tray_icon_image(self):
+        """生成 64×64 托盘图标"""
+        size = 64
+        img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([2, 2, size - 3, size - 3],
+                     fill=(34, 139, 34), outline=(20, 100, 20), width=2)
+        # 两个小圆环 + 连线，模拟链接图标
+        draw.ellipse([10, 22, 28, 42], outline='white', width=4)
+        draw.ellipse([36, 22, 54, 42], outline='white', width=4)
+        draw.line([24, 32, 40, 32], fill='white', width=4)
+        return img
+
+    def _setup_tray(self):
+        """初始化系统托盘图标（仅 pystray 可用时有效）"""
+        if not HAS_TRAY:
+            return
+
+        def _show(icon, item):
+            self.root.after(0, self._do_restore)
+
+        def _toggle(icon, item):
+            self.root.after(0, self._toggle_connection)
+
+        def _quit(icon, item):
+            self.root.after(0, self._quit_app)
+
+        menu = pystray.Menu(
+            pystray.MenuItem('显示主窗口', _show, default=True),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem('连接 / 断开', _toggle),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem('退出程序', _quit),
+        )
+        self._tray_icon = pystray.Icon(
+            'nat_tunnel', self._create_tray_icon_image(),
+            'NAT Tunnel 内网穿透', menu)
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+
+    def _withdraw_to_tray(self):
+        """隐藏主窗口到系统托盘"""
+        if not self._tray_icon:
+            self.root.iconify()
+            return
+        self.root.withdraw()
+        self._log('已最小化到系统托盘，双击图标可还原')
+
+    def _do_restore(self):
+        """从托盘还原主窗口"""
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _on_close_window(self):
+        """点击窗口 X 按钮"""
+        if self.var_minimize_tray.get() and HAS_TRAY:
+            self._withdraw_to_tray()
+        else:
+            self._quit_app()
+
+    def _on_minimize(self):
+        """用户点击任务栏最小化按钮"""
+        if self.var_minimize_tray.get() and HAS_TRAY:
+            # 延迟执行，等待窗口状态更新
+            self.root.after(80, self._withdraw_to_tray)
+
+    # ---- 开机自启 ----
+
+    def _on_autostart_toggle(self):
+        self._set_autostart(self.var_autostart.get())
+
+    def _set_autostart(self, enabled: bool):
+        """写入 / 删除 Windows 开机自启注册表项"""
+        if not HAS_WINREG:
+            if enabled:
+                self._log('当前平台不支持开机自启')
+            return
+        app_name = 'NATTunnel'
+        reg_path = r'Software\Microsoft\Windows\CurrentVersion\Run'
+        try:
+            if getattr(sys, 'frozen', False):
+                # 打包为 exe
+                cmd = f'"{sys.executable}"'
+            else:
+                script = str(Path(__file__).resolve())
+                cmd = f'"{sys.executable}" "{script}"'
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0,
+                                winreg.KEY_SET_VALUE) as key:
+                if enabled:
+                    winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, cmd)
+                    self._log('已设置开机自启')
+                else:
+                    try:
+                        winreg.DeleteValue(key, app_name)
+                        self._log('已取消开机自启')
+                    except FileNotFoundError:
+                        pass
+        except Exception as e:
+            self._log(f'设置开机自启失败: {e}')
+
+    # ---- 退出 ----
+
+    def _quit_app(self):
+        """完整退出：断连 → 停止托盘 → 销毁窗口"""
+        self._disconnect()
+        if self._tray_icon:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
 
     def _on_tunnels_configure(self, event=None):
         self._tunnels_canvas.configure(scrollregion=self._tunnels_canvas.bbox('all'))
@@ -646,6 +807,18 @@ class NATTunnelGUI:
             del self._stop_requested
 
     def run(self):
+        # 绑定窗口事件
+        self.root.protocol('WM_DELETE_WINDOW', self._on_close_window)
+        self.root.bind('<Unmap>',
+                       lambda e: self._on_minimize() if e.widget is self.root else None)
+        # 初始化托盘图标
+        self._setup_tray()
+        # 自动连接
+        if self.var_auto_connect.get():
+            cfg = self._get_config()
+            if cfg.get('server_addr') and cfg.get('auth_token') and cfg.get('tunnels'):
+                self._log('检测到自动连接配置，1 秒后自动连接...')
+                self.root.after(1000, self._connect)
         self.root.mainloop()
 
 
