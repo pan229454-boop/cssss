@@ -66,10 +66,23 @@ fi
 
 # ── 安装依赖 ──────────────────────────────────────
 step "安装 Python 依赖"
-$PYTHON -m pip install --quiet --upgrade pip 2>/dev/null || true
-$PYTHON -m pip install --quiet pyyaml 2>/dev/null \
-    || pip3 install --quiet pyyaml 2>/dev/null \
-    || warn "pyyaml 安装失败，请手动执行: pip3 install pyyaml（运行时若无 yaml 模块则使用内置 json 备选）"
+_yaml_ok=0
+# 优先尝试系统包管理器（RHEL/Debian 系均有 python3-yaml）
+if command -v dnf &>/dev/null; then
+    dnf install -y python3-pyyaml 2>/dev/null && _yaml_ok=1
+elif command -v yum &>/dev/null; then
+    yum install -y python3-pyyaml 2>/dev/null && _yaml_ok=1
+elif command -v apt-get &>/dev/null; then
+    apt-get install -y -qq python3-yaml 2>/dev/null && _yaml_ok=1
+fi
+# 系统包失败则用 pip（兼容 PEP 668 / externally-managed-environment）
+if [ "$_yaml_ok" -eq 0 ]; then
+    $PYTHON -m pip install --quiet pyyaml 2>/dev/null \
+    || $PYTHON -m pip install --quiet --break-system-packages pyyaml 2>/dev/null \
+    || pip3 install --quiet --break-system-packages pyyaml 2>/dev/null \
+    && _yaml_ok=1
+fi
+[ "$_yaml_ok" -eq 0 ] && warn "pyyaml 安装失败，服务仍可运行（使用内置 json 备选）"
 info "依赖安装完成"
 
 # ── 初始化配置文件（自动生成安全密钥） ────────────
