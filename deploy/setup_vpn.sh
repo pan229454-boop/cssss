@@ -40,6 +40,9 @@ echo ""
 # 权限检查
 [[ "$EUID" -ne 0 ]] && error "请使用 root 权限运行：sudo bash $0"
 
+# 确保 /usr/sbin 在 PATH 中（RHEL/CentOS 有时缺失）
+export PATH=/usr/sbin:/usr/local/sbin:/usr/bin:/usr/local/bin:$PATH
+
 # ── 检测系统 ──────────────────────────────────
 step "检测操作系统..."
 if [ -f /etc/os-release ]; then
@@ -86,15 +89,30 @@ if [ "$PKG_MANAGER" = "apt" ]; then
 elif [ "$PKG_MANAGER" = "yum" ] || [ "$PKG_MANAGER" = "dnf" ]; then
     $PKG_MANAGER install -y epel-release 2>/dev/null || true
     $PKG_MANAGER install -y \
-        strongswan openssl iptables-services
+        strongswan strongswan-charon strongswan-libipsec \
+        openssl iptables-services 2>/dev/null || \
+    $PKG_MANAGER install -y strongswan openssl iptables-services
 fi
 info "StrongSwan 安装完成"
 
-# ── 生成证书 ──────────────────────────────────
-step "生成 CA 根证书和服务器证书..."
-CERT_DIR="/etc/ipsec.d"
+# ── 检测 StrongSwan 配置目录（Ubuntu/Debian: /etc， RHEL: /etc/strongswan） ──
+if [ -d /etc/strongswan/ipsec.d ]; then
+    SW_CONF="/etc/strongswan"
+elif [ -d /etc/strongswan ] && [ ! -L /etc/ipsec.conf ]; then
+    SW_CONF="/etc/strongswan"
+else
+    SW_CONF="/etc"
+fi
+CERT_DIR="$SW_CONF/ipsec.d"
 mkdir -p "$CERT_DIR"/{cacerts,certs,private,p12}
-chmod 700 "$CERT_DIR/private" "$CERT_DIR/p12"
+
+# 如果是 RHEL，创建 /etc/ipsec.conf、/etc/ipsec.d、/etc/ipsec.secrets 的副本/软链接
+if [ "$SW_CONF" != "/etc" ]; then
+    [ ! -f /etc/ipsec.conf ] && ln -sf "$SW_CONF/ipsec.conf" /etc/ipsec.conf 2>/dev/null || true
+    [ ! -L /etc/ipsec.d ]   && ln -sfn "$CERT_DIR"           /etc/ipsec.d   2>/dev/null || true
+    [ ! -f /etc/ipsec.secrets ] && ln -sf "$SW_CONF/ipsec.secrets" /etc/ipsec.secrets 2>/dev/null || true
+fi
+info "配置目录: $SW_CONF"
 
 # CA 私钥 + 证书
 if [ ! -f "$CERT_DIR/private/ca.key.pem" ]; then
@@ -154,7 +172,7 @@ fi
 
 # ── 配置 ipsec.conf ───────────────────────────
 step "配置 ipsec.conf..."
-cat > /etc/ipsec.conf << EOF
+cat > "$SW_CONF/ipsec.conf" << EOF
 # NAT Tunnel VPN - ipsec.conf
 # 自动生成于 $(date '+%Y-%m-%d %H:%M:%S')
 
@@ -229,10 +247,12 @@ conn ikev2-rsa
     auto=add
 EOF
 info "ipsec.conf 已写入"
+# RHEL 路径处理
+[ "$SW_CONF" != "/etc" ] && (cp -f "$SW_CONF/ipsec.conf" /etc/ipsec.conf 2>/dev/null || true)
 
 # ── 配置 ipsec.secrets ────────────────────────
 step "配置 ipsec.secrets..."
-cat > /etc/ipsec.secrets << EOF
+cat > "$SW_CONF/ipsec.secrets" << EOF
 # NAT Tunnel VPN - ipsec.secrets
 # 自动生成于 $(date '+%Y-%m-%d %H:%M:%S')
 
@@ -248,7 +268,9 @@ $IKEV2_USERNAME : EAP "$IKEV2_PASSWORD"
 # IPSec PSK XAuth 用户（格式：用户名 : XAUTH "密码"）
 $PSK_USERNAME : XAUTH "$PSK_PASSWORD"
 EOF
-chmod 600 /etc/ipsec.secrets
+chmod 600 "$SW_CONF/ipsec.secrets"
+# RHEL 路径处理
+[ "$SW_CONF" != "/etc" ] && (cp -f "$SW_CONF/ipsec.secrets" /etc/ipsec.secrets 2>/dev/null || true)
 info "ipsec.secrets 已写入"
 
 # ── 配置 charon EAP-MSCHAPv2 插件 ─────────────
@@ -313,20 +335,31 @@ info "防火墙规则已配置（出口网卡: $OUTIF）"
 
 # ── 启动 StrongSwan ───────────────────────────
 step "启动 StrongSwan 服务..."
-if systemctl is-enabled strongswan-starter &>/dev/null 2>&1; then
-    systemctl enable strongswan-starter
-    systemctl restart strongswan-starter
-elif systemctl is-enabled strongswan &>/dev/null 2>&1 || true; then
-    systemctl enable strongswan 2>/dev/null || true
-    systemctl restart strongswan 2>/dev/null || ipsec restart
-else
-    ipsec restart
+# 尝试各种服务名
+STARTED=0
+for SVC in strongswan-starter strongswan; do
+    if systemctl list-unit-files "${SVC}.service" 2>/dev/null | grep -q "$SVC"; then
+        systemctl enable "$SVC" 2>/dev/null || true
+        systemctl restart "$SVC" 2>/dev/null && STARTED=1 && break
+    fi
+done
+
+if [ "$STARTED" -eq 0 ]; then
+    # 尝试直接调用 ipsec
+    IPSEC_BIN=$(command -v ipsec 2>/dev/null || echo "")
+    if [ -n "$IPSEC_BIN" ]; then
+        $IPSEC_BIN restart 2>/dev/null && STARTED=1
+    fi
 fi
+
+[ "$STARTED" -eq 0 ] && warn "StrongSwan 启动失败，请手动运行：systemctl restart strongswan"
 sleep 2
-if ipsec status &>/dev/null; then
+
+IPSEC_BIN=$(command -v ipsec 2>/dev/null || echo "")
+if [ -n "$IPSEC_BIN" ] && $IPSEC_BIN status &>/dev/null; then
     info "StrongSwan 运行正常"
 else
-    warn "StrongSwan 启动可能有问题，请运行 'ipsec status' 检查"
+    warn "StrongSwan 可能未完全启动，请运行：systemctl status strongswan 或 ipsec status 检查"
 fi
 
 # ── 输出连接参数 ──────────────────────────────
