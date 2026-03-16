@@ -10,6 +10,7 @@ import logging
 import hashlib
 import hmac
 import os
+import re
 import ssl
 import time
 import struct
@@ -516,6 +517,33 @@ class NATTunnelServer:
         data = body[2 + conn_id_len:]
         return conn_id, data
 
+    @staticmethod
+    def _rewrite_http_location(data: bytes, local_port: int, remote_port: int) -> bytes:
+        """重写 HTTP 响应 Location 头中的内网端口为公网端口，防止浏览器跳转到不可达的内网端口"""
+        if local_port == remote_port or not data.startswith(b'HTTP/'):
+            return data
+        # 找到 header / body 分界
+        p_rn = data.find(b'\r\n\r\n')
+        p_n  = data.find(b'\n\n')
+        if p_rn != -1:
+            header_bytes = data[:p_rn]
+            body_bytes   = data[p_rn:]
+        elif p_n != -1:
+            header_bytes = data[:p_n]
+            body_bytes   = data[p_n:]
+        else:
+            header_bytes = data
+            body_bytes   = b''
+        old_port = f':{local_port}'.encode()
+        new_port = f':{remote_port}'.encode()
+        if old_port not in header_bytes:
+            return data
+        lines = header_bytes.split(b'\n')
+        for i, line in enumerate(lines):
+            if line.lower().lstrip().startswith(b'location') and old_port in line:
+                lines[i] = line.replace(old_port, new_port)
+        return b'\n'.join(lines) + body_bytes
+
     async def _relay_visitor_to_client(self, visitor_reader, client_session, conn_id, tunnel):
         """将访问者数据转发给客户端"""
         try:
@@ -566,6 +594,8 @@ class NATTunnelServer:
         try:
             if tunnel:
                 tunnel.bytes_out += len(data)
+                # 重写 HTTP Location 头，防止浏览器跳转到内网端口
+                data = self._rewrite_http_location(data, tunnel.local_port, tunnel.remote_port)
             self._stats['total_bytes_out'] += len(data)
 
             visitor_writer.write(data)
