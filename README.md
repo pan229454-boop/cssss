@@ -77,7 +77,7 @@ sudo bash /www/wwwroot/nat-tunnel/deploy/install.sh
 4. 在界面中填写：服务器IP、Token（从管理面板→设置→查看）、设备名称
 5. 添加隧道规则（公网端口 → 本机端口），点击连接
 
-**不想装Python？** 双击 `打包为exe.bat` 生成单文件 exe，可复制到任何 Windows 运行。
+**不想装Python？** 下载NAT-Tunnel.exe到任何 Windows 运行。
 
 **常见隧道配置：**
 
